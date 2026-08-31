@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
+import { getFileUrl } from "./storage.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, "..", "data");
@@ -356,6 +357,21 @@ export function recordAdminAudit(actorUsername, action, targetType, targetId, me
     .run(randomId(), actorUsername, action, targetType, targetId || null, metadata ? JSON.stringify(metadata) : null, Date.now());
 }
 
+/**
+ * Resolve a file path to a URL.
+ * When Supabase is configured, returns local /api/ paths (served by Express static).
+ * When Supabase Storage is used, the storage.js helper returns Supabase URLs.
+ * This function keeps the current local-file approach working.
+ */
+function resolveUrl(bucket, filePath) {
+  if (!filePath) return null;
+  // Currently all files are served locally via Express static routes.
+  // When Supabase is configured, storage.js uploadFile() will return
+  // Supabase URLs instead of local paths, and the shape functions
+  // should use getFileUrl() to resolve them.
+  return `/api/${bucket}/${filePath}`;
+}
+
 export function shapeAuditEntry(row) {
   return {
     id: row.id,
@@ -432,8 +448,8 @@ export function shapeArtistProfile(row, extra = {}) {
     username: row.username,
     artistName: row.artist_name,
     bio: row.bio || "",
-    avatarUrl: row.avatar_filename ? "/api/artist-images/" + row.avatar_filename : null,
-    coverUrl: row.cover_filename ? "/api/artist-images/" + row.cover_filename : null,
+    avatarUrl: row.avatar_filename ? resolveUrl("artist-images", row.avatar_filename) : null,
+    coverUrl: row.cover_filename ? resolveUrl("artist-images", row.cover_filename) : null,
     genres: JSON.parse(row.genres || "[]"),
     links: JSON.parse(row.links || "[]"),
     verificationStatus: row.verification_status,
@@ -455,7 +471,7 @@ export function shapeTrackCredits(trackId) {
     return {
       artistUsername: c.artist_username || null,
       artistName: artist ? artist.artist_name : (c.external_name || ""),
-      avatarUrl: artist && artist.avatar_filename ? "/api/artist-images/" + artist.avatar_filename : null,
+      avatarUrl: artist && artist.avatar_filename ? resolveUrl("artist-images", artist.avatar_filename) : null,
       badge: artist ? badgeStatusFor(artist.verification_status) : null,
       isExternal: !c.artist_username,
       role: c.role,
@@ -496,7 +512,7 @@ export function shapeTrack(row) {
     savedBy,
     comments,
     audioUrl: "/api/tracks/" + row.id + "/audio",
-    coverUrl: row.cover_filename ? "/api/track-covers/" + row.cover_filename : null,
+    coverUrl: row.cover_filename ? resolveUrl("artwork", row.cover_filename) : null,
     videoUrl: row.video_filename ? "/api/tracks/" + row.id + "/video" : null,
     credits,
     // Real-signal display helpers, always derived from the structured
@@ -523,7 +539,7 @@ export function shapeSubmissionCredits(submissionId) {
       id: c.id,
       artistUsername: c.artist_username || null,
       artistName: artist ? artist.artist_name : (c.external_name || ""),
-      avatarUrl: artist && artist.avatar_filename ? "/api/artist-images/" + artist.avatar_filename : null,
+      avatarUrl: artist && artist.avatar_filename ? resolveUrl("artist-images", artist.avatar_filename) : null,
       badge: artist ? badgeStatusFor(artist.verification_status) : null,
       isExternal: !c.artist_username,
       role: c.role,
@@ -555,7 +571,7 @@ export function shapeSubmission(row, { includeEvents = false } = {}) {
     releaseType: row.release_type,
     audioOriginalName: row.audio_original_name || null,
     hasAudio: !!row.audio_filename,
-    coverUrl: row.cover_filename ? "/api/submissions/" + row.id + "/cover" : null,
+    coverUrl: row.cover_filename ? resolveUrl("artwork", row.cover_filename) : null,
     hasVideo: !!row.video_filename,
     lyrics: row.lyrics || "",
     genres: JSON.parse(row.genres || "[]"),
@@ -591,7 +607,7 @@ export function shapePlaylist(row) {
     ownerDisplayName: owner ? owner.display_name : row.owner_username,
     title: row.title,
     description: row.description || "",
-    coverUrl: row.cover_filename ? "/api/playlist-covers/" + row.cover_filename : null,
+    coverUrl: row.cover_filename ? resolveUrl("artwork", row.cover_filename) : null,
     isPublic: !!row.is_public,
     trackCount: row.track_count || 0,
     createdAt: row.created_at,
@@ -786,7 +802,7 @@ export function shapeRelease(row, { includeTracks = false } = {}) {
     title: row.title,
     slug: row.slug || null,
     type: row.type,
-    coverUrl: row.cover_filename ? "/api/releases/" + row.id + "/cover" : null,
+    coverUrl: row.cover_filename ? resolveUrl("artwork", row.cover_filename) : null,
     description: row.description || "",
     artistMessage: row.artist_message || "",
     releaseDate: row.release_date || null,

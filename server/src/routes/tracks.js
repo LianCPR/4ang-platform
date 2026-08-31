@@ -1,16 +1,9 @@
 import express from "express";
-import path from "node:path";
-import fs from "node:fs";
-import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { db, shapeTrack, recordActivity } from "../db.js";
 import { requireAuth, optionalAuth } from "../auth.js";
 import { rateLimit } from "../rateLimit.js";
-import { VIDEO_DIR } from "./submissions.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, "..", "..", "uploads");
-fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+import { getFileUrl } from "../storage.js";
 
 const router = express.Router();
 
@@ -38,25 +31,39 @@ router.get("/mine", requireAuth, (req, res) => {
 // publication pipeline, per the Phase 7 "no duplicate systems" directive.
 
 // Phát file âm thanh — chỉ khi bài đã duyệt (hoặc chính người đăng / admin xem trước)
-router.get("/:id/audio", optionalAuth, (req, res) => {
-  const row = db.prepare("SELECT * FROM tracks WHERE id = ?").get(req.params.id);
-  if (!row) return res.status(404).end();
-  const isOwner = req.user && req.user.username === row.uploader_username;
-  const isAdmin = req.user && req.user.isAdmin;
-  if (row.status !== "approved" && !isOwner && !isAdmin) return res.status(403).end();
-  res.sendFile(path.join(UPLOAD_DIR, row.audio_filename));
+router.get("/:id/audio", optionalAuth, async (req, res) => {
+  try {
+    const row = db.prepare("SELECT * FROM tracks WHERE id = ?").get(req.params.id);
+    if (!row) return res.status(404).end();
+    const isOwner = req.user && req.user.username === row.uploader_username;
+    const isAdmin = req.user && req.user.isAdmin;
+    if (row.status !== "approved" && !isOwner && !isAdmin) return res.status(403).end();
+    const url = await getFileUrl("audio", row.audio_filename);
+    if (!url) return res.status(404).end();
+    res.redirect(url);
+  } catch (e) {
+    console.error("[serveAudio]", e);
+    res.status(500).end();
+  }
 });
 
 // Music video — same gating as audio (approved, or the uploader/admin
 // previewing). Optional: most tracks have no video_filename at all, and
 // that 404s cleanly rather than serving anything.
-router.get("/:id/video", optionalAuth, (req, res) => {
-  const row = db.prepare("SELECT * FROM tracks WHERE id = ?").get(req.params.id);
-  if (!row || !row.video_filename) return res.status(404).end();
-  const isOwner = req.user && req.user.username === row.uploader_username;
-  const isAdmin = req.user && req.user.isAdmin;
-  if (row.status !== "approved" && !isOwner && !isAdmin) return res.status(403).end();
-  res.sendFile(path.join(VIDEO_DIR, row.video_filename));
+router.get("/:id/video", optionalAuth, async (req, res) => {
+  try {
+    const row = db.prepare("SELECT * FROM tracks WHERE id = ?").get(req.params.id);
+    if (!row || !row.video_filename) return res.status(404).end();
+    const isOwner = req.user && req.user.username === row.uploader_username;
+    const isAdmin = req.user && req.user.isAdmin;
+    if (row.status !== "approved" && !isOwner && !isAdmin) return res.status(403).end();
+    const url = await getFileUrl("videos", row.video_filename);
+    if (!url) return res.status(404).end();
+    res.redirect(url);
+  } catch (e) {
+    console.error("[serveVideo]", e);
+    res.status(500).end();
+  }
 });
 
 router.post("/:id/like", requireAuth, (req, res) => {

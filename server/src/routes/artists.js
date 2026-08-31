@@ -1,30 +1,15 @@
 import express from "express";
 import multer from "multer";
-import path from "node:path";
-import fs from "node:fs";
-import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
 import { db, shapeTrack, shapeArtistProfile, recordAdminAudit, createNotification, recordActivity } from "../db.js";
 import { requireAuth, optionalAuth, requireAdmin } from "../auth.js";
+import { uploadFile, deleteFile, getFileUrl, MAX_COVER_BYTES } from "../storage.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const ARTIST_IMG_DIR = process.env.ARTIST_IMG_DIR || path.join(__dirname, "..", "..", "uploads", "artist-images");
-fs.mkdirSync(ARTIST_IMG_DIR, { recursive: true });
-
-// Raster types only, and the stored extension is always derived from this
-// whitelist — never from the client-supplied filename or mimetype. That
-// matters specifically because these files are served back publicly: an
-// SVG (which can carry a <script>) accepted under a spoofed mimetype and
-// then served back with its original extension would execute in a
-// browser; forcing a safe extension here closes that off.
 const IMAGE_EXT_BY_MIME = { "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif" };
 
+// Memory storage — upload to Supabase Storage after multer reads buffer.
 const imageUpload = multer({
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => cb(null, ARTIST_IMG_DIR),
-    filename: (req, file, cb) => cb(null, randomUUID() + IMAGE_EXT_BY_MIME[file.mimetype]),
-  }),
-  limits: { fileSize: 8 * 1024 * 1024 }, // 8MB — these are profile images, not master audio
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_COVER_BYTES },
   fileFilter: (req, file, cb) => {
     if (!IMAGE_EXT_BY_MIME[file.mimetype]) return cb(new Error("Chỉ nhận ảnh PNG, JPEG, WEBP hoặc GIF."));
     cb(null, true);
@@ -178,28 +163,40 @@ router.patch("/me", requireAuth, (req, res) => {
 });
 
 router.post("/me/avatar", requireAuth, (req, res) => {
-  imageUpload.single("avatar")(req, res, (err) => {
+  imageUpload.single("avatar")(req, res, async (err) => {
     if (err) return res.status(400).json({ error: err.message || "Lỗi tải ảnh." });
-    const row = db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.user.username);
-    if (!row) return res.status(404).json({ error: "Bạn chưa có hồ sơ nghệ sĩ." });
-    if (!req.file) return res.status(400).json({ error: "Cần chọn ảnh." });
-    const old = row.avatar_filename;
-    db.prepare("UPDATE artist_profiles SET avatar_filename = ? WHERE username = ?").run(req.file.filename, req.user.username);
-    if (old) fs.unlink(path.join(ARTIST_IMG_DIR, old), () => {});
-    res.json({ artist: shapeArtistProfile(db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.user.username)) });
+    try {
+      const row = db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.user.username);
+      if (!row) return res.status(404).json({ error: "Bạn chưa có hồ sơ nghệ sĩ." });
+      if (!req.file) return res.status(400).json({ error: "Cần chọn ảnh." });
+      const old = row.avatar_filename;
+      const filePath = await uploadFile("artist-images", req.user.username, req.file.buffer, req.file.mimetype, req.file.originalname);
+      db.prepare("UPDATE artist_profiles SET avatar_filename = ? WHERE username = ?").run(filePath.path, req.user.username);
+      if (old) deleteFile("artist-images", old);
+      res.json({ artist: shapeArtistProfile(db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.user.username)) });
+    } catch (e) {
+      console.error("[avatar upload]", e);
+      res.status(500).json({ error: "Lỗi tải ảnh lên." });
+    }
   });
 });
 
 router.post("/me/cover", requireAuth, (req, res) => {
-  imageUpload.single("cover")(req, res, (err) => {
+  imageUpload.single("cover")(req, res, async (err) => {
     if (err) return res.status(400).json({ error: err.message || "Lỗi tải ảnh." });
-    const row = db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.user.username);
-    if (!row) return res.status(404).json({ error: "Bạn chưa có hồ sơ nghệ sĩ." });
-    if (!req.file) return res.status(400).json({ error: "Cần chọn ảnh." });
-    const old = row.cover_filename;
-    db.prepare("UPDATE artist_profiles SET cover_filename = ? WHERE username = ?").run(req.file.filename, req.user.username);
-    if (old) fs.unlink(path.join(ARTIST_IMG_DIR, old), () => {});
-    res.json({ artist: shapeArtistProfile(db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.user.username)) });
+    try {
+      const row = db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.user.username);
+      if (!row) return res.status(404).json({ error: "Bạn chưa có hồ sơ nghệ sĩ." });
+      if (!req.file) return res.status(400).json({ error: "Cần chọn ảnh." });
+      const old = row.cover_filename;
+      const filePath = await uploadFile("artist-images", req.user.username, req.file.buffer, req.file.mimetype, req.file.originalname);
+      db.prepare("UPDATE artist_profiles SET cover_filename = ? WHERE username = ?").run(filePath.path, req.user.username);
+      if (old) deleteFile("artist-images", old);
+      res.json({ artist: shapeArtistProfile(db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.user.username)) });
+    } catch (e) {
+      console.error("[cover upload]", e);
+      res.status(500).json({ error: "Lỗi tải ảnh lên." });
+    }
   });
 });
 

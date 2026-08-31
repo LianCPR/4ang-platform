@@ -5,10 +5,10 @@ import { fileURLToPath } from "url";
 import authRoutes from "./routes/auth.js";
 import trackRoutes from "./routes/tracks.js";
 import adminRoutes from "./routes/admin.js";
-import artistRoutes, { ARTIST_IMG_DIR } from "./routes/artists.js";
-import submissionRoutes, { COVER_DIR } from "./routes/submissions.js";
+import artistRoutes from "./routes/artists.js";
+import submissionRoutes from "./routes/submissions.js";
 import reportRoutes from "./routes/reports.js";
-import playlistRoutes, { PLAYLIST_COVER_DIR } from "./routes/playlists.js";
+import playlistRoutes from "./routes/playlists.js";
 import discoverRoutes from "./routes/discover.js";
 import notificationRoutes from "./routes/notifications.js";
 import libraryRoutes from "./routes/library.js";
@@ -62,19 +62,23 @@ app.use("/api/releases", releaseRoutes);
 app.use("/api/artist-applications", artistAppRoutes);
 app.use("/api/support", supportRoutes);
 app.use("/api/migrate", migrateRoutes);
-// Artist avatar/cover images — public and unauthenticated on purpose
-// (profile pictures aren't sensitive, unlike gated track audio).
-app.use("/api/artist-images", express.static(ARTIST_IMG_DIR));
-// Published-track cover art — public the same way. Filenames are random
-// UUIDs never revealed by any API response before a submission is
-// actually published (the private preview route requires owner/admin and
-// is fetched by id, not this static path), so nothing pending leaks.
-app.use("/api/track-covers", express.static(COVER_DIR));
-app.use("/api/playlist-covers", express.static(PLAYLIST_COVER_DIR));
-
 // Serve client build in production (for standalone deployment)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Static file serving for local disk fallback (Supabase Storage is primary when configured)
+import { mkdirSync } from "node:fs";
+const LOCAL_UPLOADS = path.join(__dirname, "..", "uploads");
+const LOCAL_ARTIST_IMAGES = path.join(LOCAL_UPLOADS, "artist-images");
+const LOCAL_COVERS = path.join(LOCAL_UPLOADS, "covers");
+const LOCAL_PLAYLIST_COVERS = path.join(LOCAL_UPLOADS, "playlist-covers");
+mkdirSync(LOCAL_ARTIST_IMAGES, { recursive: true });
+mkdirSync(LOCAL_COVERS, { recursive: true });
+mkdirSync(LOCAL_PLAYLIST_COVERS, { recursive: true });
+app.use("/api/artist-images", express.static(LOCAL_ARTIST_IMAGES));
+app.use("/api/artwork", express.static(LOCAL_COVERS));
+app.use("/api/track-covers", express.static(LOCAL_COVERS));
+app.use("/api/playlist-covers", express.static(LOCAL_PLAYLIST_COVERS));
 const clientDist = path.join(__dirname, "..", "..", "client", "dist");
 if (process.env.NODE_ENV === "production" || process.env.SERVE_CLIENT === "true") {
   app.use(express.static(clientDist));

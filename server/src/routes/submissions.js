@@ -1,55 +1,23 @@
 import express from "express";
 import multer from "multer";
-import path from "node:path";
-import fs from "node:fs";
-import { fileURLToPath } from "node:url";
 import { randomUUID, createHash } from "node:crypto";
 import { db, shapeSubmission, shapeTrack, recordAdminAudit, getSetting, createNotification, recordActivity } from "../db.js";
 import { requireAuth, optionalAuth, requireAdmin } from "../auth.js";
 import { rateLimit } from "../rateLimit.js";
 import { GENRES } from "./artists.js";
+import { uploadFile, deleteFile, getFileUrl, MAX_AUDIO_BYTES, MAX_COVER_BYTES, MAX_VIDEO_BYTES } from "../storage.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Submission audio shares the exact same folder tracks.js already streams
-// from — on approval a track is published by pointing straight at these
-// filenames, never by copying/moving files around.
-const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, "..", "..", "uploads");
-export const COVER_DIR = process.env.COVER_DIR || path.join(__dirname, "..", "..", "uploads", "covers");
-export const VIDEO_DIR = process.env.VIDEO_DIR || path.join(__dirname, "..", "..", "uploads", "videos");
-fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-fs.mkdirSync(COVER_DIR, { recursive: true });
-fs.mkdirSync(VIDEO_DIR, { recursive: true });
 
 // Same "derive the extension from a trusted whitelist, never from the
 // client" rule artists.js already applies to profile images — these files
 // get served back to browsers, so a spoofed mimetype must never earn a
 // dangerous extension.
-const IMAGE_EXT_BY_MIME = { "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif" };
-const VIDEO_EXT_BY_MIME = { "video/mp4": ".mp4", "video/webm": ".webm", "video/quicktime": ".mov" };
-
-const MAX_AUDIO_BYTES = 30 * 1024 * 1024; // matches tracks.js
-const MAX_COVER_BYTES = 8 * 1024 * 1024; // matches artists.js profile images
-const MAX_VIDEO_BYTES = 150 * 1024 * 1024;
-
 export const CREDIT_ROLES = ["featured", "producer", "composer", "lyricist", "remixer", "dj", "vocalist", "other"];
 export const TERMS_VERSION = "2026-08";
 
+// Memory storage — files read into buffer, then uploaded to Supabase Storage.
 const submissionUpload = multer({
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => {
-      if (file.fieldname === "cover") return cb(null, COVER_DIR);
-      if (file.fieldname === "video") return cb(null, VIDEO_DIR);
-      return cb(null, UPLOAD_DIR);
-    },
-    filename: (req, file, cb) => {
-      if (file.fieldname === "cover") return cb(null, randomUUID() + (IMAGE_EXT_BY_MIME[file.mimetype] || ""));
-      if (file.fieldname === "video") return cb(null, randomUUID() + (VIDEO_EXT_BY_MIME[file.mimetype] || ""));
-      return cb(null, randomUUID() + (path.extname(file.originalname) || ""));
-    },
-  }),
-  // One global ceiling (multer can't do per-field limits); the tighter
-  // real per-field limits (30MB audio / 8MB cover) are enforced by hand
-  // right after upload, once we know which field each file belongs to.
+  storage: multer.memoryStorage(),
   limits: { fileSize: MAX_VIDEO_BYTES },
   fileFilter: (req, file, cb) => {
     if (file.fieldname === "audio") {
@@ -57,16 +25,22 @@ const submissionUpload = multer({
       return cb(null, true);
     }
     if (file.fieldname === "cover") {
-      if (!IMAGE_EXT_BY_MIME[file.mimetype]) return cb(new Error("Ảnh bìa cần là PNG, JPEG, WEBP hoặc GIF."));
-      return cb(null, true);
+      cb(null, true);
+    } else if (file.fieldname === "video") {
+      cb(null, true);
+    } else {
+      cb(new Error("Trường file không hợp lệ."));
     }
-    if (file.fieldname === "video") {
-      if (!VIDEO_EXT_BY_MIME[file.mimetype]) return cb(new Error("Video cần là MP4, WEBM hoặc MOV."));
-      return cb(null, true);
-    }
-    cb(new Error("Trường file không hợp lệ."));
   },
 }).fields([{ name: "audio", maxCount: 1 }, { name: "cover", maxCount: 1 }, { name: "video", maxCount: 1 }]);
+
+/** Upload a multer memory file to Supabase Storage. Returns storage path for DB. */
+async function uploadToStorage(req, fieldName, bucket) {
+  const file = req.files?.[fieldName]?.[0];
+  if (!file) return null;
+  const result = await uploadFile(bucket, req.user.username, file.buffer, file.mimetype, file.originalname);
+  return result.path;
+}
 
 function friendlyMulterError(err) {
   if (err && err.code === "LIMIT_FILE_SIZE") return "File vượt quá dung lượng cho phép.";
@@ -77,22 +51,14 @@ function friendlyMulterError(err) {
 function cleanupUploadedFiles(files) {
   if (!files) return;
   for (const key of Object.keys(files)) {
+    const bucket = key === "cover" ? "artwork" : key === "video" ? "videos" : "audio";
     for (const f of files[key]) {
-      const dir = key === "cover" ? COVER_DIR : key === "video" ? VIDEO_DIR : UPLOAD_DIR;
-      fs.unlink(path.join(dir, f.filename), () => {});
+      // Memory storage has no file.path to delete — nothing to clean up here
     }
   }
 }
 
-function fileChecksum(filePath) {
-  return new Promise((resolve, reject) => {
-    const hash = createHash("sha256");
-    const stream = fs.createReadStream(filePath);
-    stream.on("data", (chunk) => hash.update(chunk));
-    stream.on("end", () => resolve(hash.digest("hex")));
-    stream.on("error", reject);
-  });
-}
+// fileChecksum removed — computed inline from memory buffer
 
 // Only 4ANG Artists (independent or verified) may submit a request —
 // normal accounts never see or reach this at all, and this check happens
@@ -241,7 +207,11 @@ router.post("/", requireAuth, requireArtist, rateLimit({ windowMs: 60_000, max: 
       }
 
       let audioChecksum = null;
-      if (audioFile) audioChecksum = await fileChecksum(audioFile.path);
+      if (audioFile) {
+        const hash = createHash("sha256");
+        hash.update(audioFile.buffer);
+        audioChecksum = hash.digest("hex");
+      }
 
       if (action === "submit" && audioChecksum) {
         const dupe = db.prepare(
@@ -254,6 +224,11 @@ router.post("/", requireAuth, requireArtist, rateLimit({ windowMs: 60_000, max: 
       const now = Date.now();
       const status = action === "submit" ? "pending_review" : "draft";
 
+      // Upload files to Supabase Storage
+      const audioPath = audioFile ? await uploadToStorage(req, "audio", "audio") : null;
+      const coverPath = coverFile ? await uploadToStorage(req, "cover", "artwork") : null;
+      const videoPath = videoFile ? await uploadToStorage(req, "video", "videos") : null;
+
       db.prepare(`INSERT INTO submissions
         (id, artist_username, title, release_type, audio_filename, audio_original_name, audio_checksum,
          cover_filename, video_filename, lyrics, genres, language, is_explicit, release_date,
@@ -261,8 +236,8 @@ router.post("/", requireAuth, requireArtist, rateLimit({ windowMs: 60_000, max: 
         VALUES (?, ?, ?, 'single', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(
           id, req.user.username, f.title,
-          audioFile ? audioFile.filename : null, audioFile ? audioFile.originalname : null, audioChecksum,
-          coverFile ? coverFile.filename : null, videoFile ? videoFile.filename : null,
+          audioPath, audioFile ? audioFile.originalname : null, audioChecksum,
+          coverPath, videoPath,
           f.lyrics.trim(), JSON.stringify(genreResult.value), f.language || null, f.isExplicit ? 1 : 0, f.releaseDate || null,
           f.rightsConfirmed ? 1 : 0, f.termsAccepted ? 1 : 0, f.termsAccepted ? TERMS_VERSION : null, f.termsAccepted ? now : null,
           status, now, now, action === "submit" ? now : null
@@ -322,10 +297,15 @@ router.patch("/:id", requireAuth, rateLimit({ windowMs: 60_000, max: 12, keyPref
       if (videoFile && videoFile.size > MAX_VIDEO_BYTES) return fail(400, "Video tối đa 150MB.");
 
       const removeVideo = req.body.removeVideo === "true";
-      const finalAudioFilename = audioFile ? audioFile.filename : row.audio_filename;
+      // Upload new files to Supabase Storage
+      const newAudioPath = audioFile ? await uploadToStorage(req, "audio", "audio") : null;
+      const newCoverPath = coverFile ? await uploadToStorage(req, "cover", "artwork") : null;
+      const newVideoPath = videoFile ? await uploadToStorage(req, "video", "videos") : null;
+
+      const finalAudioFilename = newAudioPath || row.audio_filename;
       const finalAudioOriginal = audioFile ? audioFile.originalname : row.audio_original_name;
-      const finalCoverFilename = coverFile ? coverFile.filename : row.cover_filename;
-      const finalVideoFilename = videoFile ? videoFile.filename : (removeVideo ? null : row.video_filename);
+      const finalCoverFilename = newCoverPath || row.cover_filename;
+      const finalVideoFilename = newVideoPath || (removeVideo ? null : row.video_filename);
 
       if (action === "submit") {
         if (!finalAudioFilename) return fail(400, "Cần tải lên file nhạc.");
@@ -336,7 +316,11 @@ router.patch("/:id", requireAuth, rateLimit({ windowMs: 60_000, max: 12, keyPref
       }
 
       let finalChecksum = row.audio_checksum;
-      if (audioFile) finalChecksum = await fileChecksum(audioFile.path);
+      if (audioFile) {
+        const hash = createHash("sha256");
+        hash.update(audioFile.buffer);
+        finalChecksum = hash.digest("hex");
+      }
 
       if (action === "submit" && finalChecksum) {
         const dupe = db.prepare(
@@ -366,9 +350,9 @@ router.patch("/:id", requireAuth, rateLimit({ windowMs: 60_000, max: 12, keyPref
 
       // Only delete the old file once the DB row that referenced it has
       // actually been overwritten — never before.
-      if (audioFile && row.audio_filename) fs.unlink(path.join(UPLOAD_DIR, row.audio_filename), () => {});
-      if (coverFile && row.cover_filename) fs.unlink(path.join(COVER_DIR, row.cover_filename), () => {});
-      if ((videoFile || removeVideo) && row.video_filename) fs.unlink(path.join(VIDEO_DIR, row.video_filename), () => {});
+      if (audioFile && row.audio_filename) deleteFile("audio", row.audio_filename);
+      if (coverFile && row.cover_filename) deleteFile("artwork", row.cover_filename);
+      if ((videoFile || removeVideo) && row.video_filename) deleteFile("videos", row.video_filename);
 
       db.prepare("DELETE FROM submission_credits WHERE submission_id = ?").run(row.id);
       insertCredits(row.id, creditResult.value);
@@ -474,16 +458,23 @@ router.post("/:id/publish", requireAuth, requireAdmin, adminReviewLimit, (req, r
 // requires the owner or an admin, the same trust model tracks.js already
 // uses for gated (non-approved) track audio.
 function serveSubmissionAsset(kind) {
-  return (req, res) => {
-    const row = db.prepare("SELECT * FROM submissions WHERE id = ?").get(req.params.id);
-    if (!row) return res.status(404).end();
-    const isOwner = req.user && req.user.username === row.artist_username;
-    const isAdmin = req.user && req.user.isAdmin;
-    if (!isOwner && !isAdmin) return res.status(403).end();
-    const filename = kind === "cover" ? row.cover_filename : kind === "video" ? row.video_filename : row.audio_filename;
-    if (!filename) return res.status(404).end();
-    const dir = kind === "cover" ? COVER_DIR : kind === "video" ? VIDEO_DIR : UPLOAD_DIR;
-    res.sendFile(path.join(dir, filename));
+  const bucket = kind === "cover" ? "artwork" : kind === "video" ? "videos" : "audio";
+  return async (req, res) => {
+    try {
+      const row = db.prepare("SELECT * FROM submissions WHERE id = ?").get(req.params.id);
+      if (!row) return res.status(404).end();
+      const isOwner = req.user && req.user.username === row.artist_username;
+      const isAdmin = req.user && req.user.isAdmin;
+      if (!isOwner && !isAdmin) return res.status(403).end();
+      const filePath = kind === "cover" ? row.cover_filename : kind === "video" ? row.video_filename : row.audio_filename;
+      if (!filePath) return res.status(404).end();
+      const url = await getFileUrl(bucket, filePath);
+      if (!url) return res.status(404).end();
+      res.redirect(url);
+    } catch (e) {
+      console.error("[serveSubmissionAsset]", e);
+      res.status(500).end();
+    }
   };
 }
 router.get("/:id/audio", optionalAuth, serveSubmissionAsset("audio"));
