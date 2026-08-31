@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+server/.env
+server/.env.local
+server/.env.*.local
+
+# Build output
+dist/
+build/
+.next/
+
+# Database
+*.sqlite
+*.sqlite-journal
+server/data/
+
+# Uploads
+uploads/
+server/uploads/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Supabase
+supabase/.temp/
+
+# Freebuff
+.freebuff/

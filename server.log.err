@@ -1,0 +1,4 @@
+[4ANG] Supabase URL or Anon Key not configured.
+[canh bao] Chua dat JWT_SECRET trong .env - dang dung secret mac dinh, KHONG an toan cho production.
+(node:22980) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
