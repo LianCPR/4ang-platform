@@ -448,8 +448,8 @@ export function shapeArtistProfile(row, extra = {}) {
     username: row.username,
     artistName: row.artist_name,
     bio: row.bio || "",
-    avatarUrl: row.avatar_filename ? resolveUrl("artist-images", row.avatar_filename) : null,
-    coverUrl: row.cover_filename ? resolveUrl("artist-images", row.cover_filename) : null,
+    avatarUrl: row.avatar_filename ? resolveUrl("avatars", row.avatar_filename) : null,
+    coverUrl: row.cover_filename ? resolveUrl("artwork", row.cover_filename) : null,
     genres: JSON.parse(row.genres || "[]"),
     links: JSON.parse(row.links || "[]"),
     verificationStatus: row.verification_status,
@@ -471,7 +471,7 @@ export function shapeTrackCredits(trackId) {
     return {
       artistUsername: c.artist_username || null,
       artistName: artist ? artist.artist_name : (c.external_name || ""),
-      avatarUrl: artist && artist.avatar_filename ? resolveUrl("artist-images", artist.avatar_filename) : null,
+      avatarUrl: artist && artist.avatar_filename ? resolveUrl("avatars", artist.avatar_filename) : null,
       badge: artist ? badgeStatusFor(artist.verification_status) : null,
       isExternal: !c.artist_username,
       role: c.role,
@@ -539,7 +539,7 @@ export function shapeSubmissionCredits(submissionId) {
       id: c.id,
       artistUsername: c.artist_username || null,
       artistName: artist ? artist.artist_name : (c.external_name || ""),
-      avatarUrl: artist && artist.avatar_filename ? resolveUrl("artist-images", artist.avatar_filename) : null,
+      avatarUrl: artist && artist.avatar_filename ? resolveUrl("avatars", artist.avatar_filename) : null,
       badge: artist ? badgeStatusFor(artist.verification_status) : null,
       isExternal: !c.artist_username,
       role: c.role,
@@ -879,3 +879,19 @@ export function generateRightsRecordId() {
   const rand = randomId().replace(/-/g, '').slice(0, 8).toUpperCase();
   return `4ANG-RGT-${year}-${rand}`;
 }
+
+// ─── Onboarding ─────────────────────────────────────────
+try { db.exec("ALTER TABLE users ADD COLUMN onboarding_completed INTEGER NOT NULL DEFAULT 0"); } catch (e) { /* already present */ }
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS user_preferences (
+    user_id INTEGER PRIMARY KEY,
+    favorite_genres TEXT DEFAULT '[]',
+    favorite_artists TEXT DEFAULT '[]',
+    preferred_moods TEXT DEFAULT '[]',
+    onboarding_step INTEGER DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  );
+`);

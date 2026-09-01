@@ -31,6 +31,7 @@ function publicUser(user) {
     displayName: user.display_name,
     isAdmin: !!user.is_admin,
     isArtist: !!user.is_artist,
+    onboardingCompleted: !!user.onboarding_completed,
     email: user.email || null,
     emailVerified: !!user.email_verified,
     phone: user.phone || null,
@@ -669,6 +670,66 @@ router.patch("/profile", requireAuth, async (req, res) => {
   }
   const user = db.prepare("SELECT * FROM users WHERE username = ?").get(req.user.username);
   res.json({ user: publicUser(user) });
+});
+
+// ─── Onboarding Preferences ──────────────────────────────
+
+router.get("/preferences", requireAuth, (req, res) => {
+  const row = db.prepare("SELECT * FROM user_preferences WHERE user_id = ?").get(req.user.id);
+  if (!row) return res.json({ preferences: null, onboardingCompleted: !!req.user.onboarding_completed });
+  res.json({
+    preferences: {
+      favoriteGenres: JSON.parse(row.favorite_genres || "[]"),
+      favoriteArtists: JSON.parse(row.favorite_artists || "[]"),
+      preferredMoods: JSON.parse(row.preferred_moods || "[]"),
+      onboardingStep: row.onboarding_step,
+    },
+    onboardingCompleted: !!req.user.onboarding_completed,
+  });
+});
+
+router.post("/preferences", requireAuth, (req, res) => {
+  const { favoriteGenres, favoriteArtists, preferredMoods, onboardingStep } = req.body || {};
+  const now = Date.now();
+  const existing = db.prepare("SELECT user_id FROM user_preferences WHERE user_id = ?").get(req.user.id);
+  if (existing) {
+    db.prepare(`
+      UPDATE user_preferences SET
+        favorite_genres = COALESCE(?, favorite_genres),
+        favorite_artists = COALESCE(?, favorite_artists),
+        preferred_moods = COALESCE(?, preferred_moods),
+        onboarding_step = COALESCE(?, onboarding_step),
+        updated_at = ?
+      WHERE user_id = ?
+    `).run(
+      favoriteGenres != null ? JSON.stringify(favoriteGenres) : null,
+      favoriteArtists != null ? JSON.stringify(favoriteArtists) : null,
+      preferredMoods != null ? JSON.stringify(preferredMoods) : null,
+      onboardingStep != null ? onboardingStep : null,
+      now,
+      req.user.id
+    );
+  } else {
+    db.prepare(`
+      INSERT INTO user_preferences (user_id, favorite_genres, favorite_artists, preferred_moods, onboarding_step, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      req.user.id,
+      JSON.stringify(favoriteGenres || []),
+      JSON.stringify(favoriteArtists || []),
+      JSON.stringify(preferredMoods || []),
+      onboardingStep || 0,
+      now,
+      now
+    );
+  }
+  res.json({ ok: true });
+});
+
+router.post("/complete-onboarding", requireAuth, (req, res) => {
+  db.prepare("UPDATE users SET onboarding_completed = 1 WHERE id = ?").run(req.user.id);
+  const user = db.prepare("SELECT * FROM users WHERE username = ?").get(req.user.username);
+  res.json({ ok: true, user: publicUser(user) });
 });
 
 export default router;

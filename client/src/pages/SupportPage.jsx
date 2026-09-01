@@ -15,7 +15,7 @@ const TICKET_TYPES = [
 const STATUS_MAP = {
   pending: { label: "Đang chờ", icon: Clock, color: "var(--c-gold)" },
   in_progress: { label: "Đang xử lý", icon: AlertCircle, color: "var(--c-sage)" },
-  resolved: { label: "Đã giải quyết", icon: CheckCircle, color: "#4caf50" },
+  resolved: { label: "Đã giải quyết", icon: CheckCircle, color: "var(--success)" },
   closed: { label: "Đã đóng", icon: CheckCircle, color: "var(--text-faint)" },
 };
 
@@ -106,7 +106,7 @@ export default function SupportPage({ session, showToast, onBack }) {
                 <div className="support-contact-options">
                   <div className="support-contact-card">
                     <Mail size={18} />
-                    <span>support@4ang.vn</span>
+                    <span>heiennek286@gmail.com</span>
                   </div>
                   <div className="support-contact-card">
                     <HelpCircle size={18} />

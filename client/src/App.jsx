@@ -47,6 +47,7 @@ const ListeningStatsPage = lazy(() => import("./pages/ListeningStatsPage"));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage"));
 const AccessDeniedPage = lazy(() => import("./pages/AccessDeniedPage"));
 import SmartMixRail from "./components/SmartMixRail";
+import OnboardingPage from "./pages/OnboardingPage";
 
 import "./styles/index.css";
 
@@ -72,7 +73,7 @@ export default function App() {
   const [followedUsernames, setFollowedUsernames] = useState([]);
   const [becomeArtistOpen, setBecomeArtistOpen] = useState(false);
   const [viewingArtist, setViewingArtist] = useState(null);
-  const [artistDashboardOpen, setArtistDashboardOpen] = useState(false);
+
 
   const [current, setCurrent] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -122,6 +123,7 @@ export default function App() {
         try {
           const { user } = await api.me();
           setSession(user);
+
         } catch (e) {
           setToken(null);
         }
@@ -742,6 +744,15 @@ export default function App() {
             <AnimatePresence mode="wait">
               <motion.div key={activeTab} variants={panelVariants} initial="initial" animate="animate" exit="exit">
                 <Suspense fallback={pageFallback}>
+                {activeTab === "onboarding" && (
+                  <OnboardingPage
+                    session={session}
+                    onComplete={() => {
+                      setSession((prev) => ({ ...prev, onboardingCompleted: true }));
+                      goTab("home");
+                    }}
+                  />
+                )}
                 {activeTab === "not-found" && (
                   <NotFoundPage onGoHome={() => goTab("home")} />
                 )}
@@ -764,7 +775,7 @@ export default function App() {
                   <ArtistProfilePage
                     username={viewingArtist} session={session}
                     onBack={() => goTab("home")}
-                    onOpenDashboard={() => { setArtistDashboardOpen(true); }}
+                    onOpenDashboard={() => goTab("artist-dashboard")}
                     current={current} isPlaying={isPlaying} progress={progress}
                     onPlay={playTrackAtIndex} onLike={toggleLike} onSave={toggleSave} onShare={handleShare}
                     onComment={(id) => setSheet({ type: "comments", trackId: id })}
@@ -854,7 +865,7 @@ export default function App() {
                 )}
                 {activeTab === "saved" && <SavedPage savedList={savedList} {...sharedPageProps} />}
                 {activeTab === "settings" && (
-                  <SettingsPage session={session} showToast={showToast} onBack={() => setActiveTab("profile")} />
+                  <SettingsPage session={session} showToast={showToast} onBack={() => setActiveTab("profile")} onOpenOnboarding={() => setActiveTab("onboarding")} />
                 )}
                 {activeTab === "support" && (
                   <SupportPage session={session} showToast={showToast} onBack={() => setActiveTab("profile")} />
@@ -870,10 +881,19 @@ export default function App() {
                     myArtist={myArtist}
                     onBecomeArtist={() => setActiveTab("become-artist")}
                     onOpenArtistProfile={() => { setViewingArtist(session.username); setActiveTab("artist"); }}
-                    onOpenArtistDashboard={() => setArtistDashboardOpen(true)}
+                    onOpenArtistDashboard={() => goTab("artist-dashboard")}
                     onAddToPlaylist={(trackId) => setAddToPlaylistTrackId(trackId)}
                     onOpenSettings={() => setActiveTab("settings")}
                     onOpenSupport={() => setActiveTab("support")}
+                  />
+                )}
+                {activeTab === "artist-dashboard" && (
+                  <ArtistDashboardPage
+                    session={session} showToast={showToast}
+                    onClose={() => { goTab("profile"); refreshMyArtist(); }}
+                    onOpenSubmitMusic={openSubmitMusic}
+                    submissionsRefreshKey={submissionsRefreshKey}
+                    onOpenArtist={() => { setViewingArtist(session.username); goTab("artist"); }}
                   />
                 )}
                 </Suspense>
@@ -953,17 +973,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <AnimatePresence>
-        {artistDashboardOpen && (
-          <Suspense fallback={pageFallback}>
-          <ArtistDashboardPage
-            onClose={() => { setArtistDashboardOpen(false); refreshMyArtist(); }}
-            onOpenSubmitMusic={openSubmitMusic}
-            submissionsRefreshKey={submissionsRefreshKey}
-          />
-          </Suspense>
-        )}
-      </AnimatePresence>
+
 
 
 

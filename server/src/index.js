@@ -69,13 +69,13 @@ const __dirname = path.dirname(__filename);
 // Static file serving for local disk fallback (Supabase Storage is primary when configured)
 import { mkdirSync } from "node:fs";
 const LOCAL_UPLOADS = path.join(__dirname, "..", "uploads");
-const LOCAL_ARTIST_IMAGES = path.join(LOCAL_UPLOADS, "artist-images");
+const LOCAL_AVATARS = path.join(LOCAL_UPLOADS, "avatars");
 const LOCAL_COVERS = path.join(LOCAL_UPLOADS, "covers");
 const LOCAL_PLAYLIST_COVERS = path.join(LOCAL_UPLOADS, "playlist-covers");
-mkdirSync(LOCAL_ARTIST_IMAGES, { recursive: true });
+mkdirSync(LOCAL_AVATARS, { recursive: true });
 mkdirSync(LOCAL_COVERS, { recursive: true });
 mkdirSync(LOCAL_PLAYLIST_COVERS, { recursive: true });
-app.use("/api/artist-images", express.static(LOCAL_ARTIST_IMAGES));
+app.use("/api/avatars", express.static(LOCAL_AVATARS));
 app.use("/api/artwork", express.static(LOCAL_COVERS));
 app.use("/api/track-covers", express.static(LOCAL_COVERS));
 app.use("/api/playlist-covers", express.static(LOCAL_PLAYLIST_COVERS));

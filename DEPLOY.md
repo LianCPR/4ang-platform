@@ -1,181 +1,213 @@
-# 4ANG — Private Beta Deployment Guide
+# 4ANG — Deployment Guide
 
-## Architecture
+## Architecture Options
+
+### Option A: Vercel (Frontend) + Render (Backend) ⭐ Recommended
 
 ```
-┌──────────────────────────────────────────────────────┐
-│                    Vercel                              │
-│  ┌────────────────┐   ┌─────────────────────────┐    │
-│  │  Static Client  │   │  Serverless API          │    │
-│  │  (Vite build)   │   │  (Express → Node)        │    │
-│  │                 │   │                          │    │
-│  │  React SPA      │──▶│  /api/* routes            │    │
-│  │  code-split     │   │  Auth (dual-mode)         │    │
-│  │  17 chunks      │   │  Music, Upload, Search    │    │
-│  └────────────────┘   └──────────┬───────────────┘    │
-│                                   │                    │
-│                    ┌──────────────▼───────────────┐    │
-│                    │         Supabase              │    │
-│                    │  • Auth (JWT)                 │    │
-│                    │  • PostgreSQL (data)           │    │
-│                    │  • Storage (audio/artwork)     │    │
-│                    │  • RLS (security)              │    │
-│                    └──────────────────────────────┘    │
-└──────────────────────────────────────────────────────┘
+┌─────────────────────┐          ┌──────────────────────┐
+│     Vercel           │          │     Render            │
+│  ┌───────────────┐  │  /api/*  │  ┌────────────────┐  │
+│  │  React + Vite  │──┼─────────▶│  Express + Node  │  │
+│  │  Static SPA    │  │  proxy   │  SQLite on disk   │  │
+│  └───────────────┘  │          │  File uploads     │  │
+└─────────────────────┘          └──────────────────────┘
+```
+
+### Option B: All-in-One on Render
+
+```
+┌──────────────────────────────────┐
+│          Render                   │
+│  ┌───────────────┐               │
+│  │  Express      │               │
+│  │  + serves     │               │
+│  │  client build │               │
+│  │  SQLite       │               │
+│  └───────────────┘               │
+└──────────────────────────────────┘
 ```
 
 ---
 
-## Prerequisites
+## Option A: Vercel + Render (Recommended)
 
-- [ ] Supabase account (free tier works) — [supabase.com](https://supabase.com)
-- [ ] Vercel account (free tier works) — [vercel.com](https://vercel.com)
-- [ ] Node.js 22+ installed locally
-- [ ] Git repository pushed to GitHub
-
----
-
-## Step 1: Supabase Setup
-
-1. [ ] Create a new Supabase project
-2. [ ] Go to **SQL Editor**
-3. [ ] Paste contents of `server/supabase-migration.sql`
-4. [ ] Click **Run** — creates all tables, indexes, RLS policies
-5. [ ] Go to **Settings → API** — note these values:
-   - Project URL (`https://xxxxx.supabase.co`)
-   - `anon` public key
-   - `service_role` secret key
-6. [ ] Go to **Authentication → Settings**:
-   - Enable **Email** provider
-   - Optionally enable **Phone** (requires Twilio)
-   - Optionally enable **Google** OAuth (requires Google Cloud Console)
-   - Optionally enable **Apple** OAuth (requires Apple Developer)
+### Prerequisites
+- [ ] GitHub account with repo pushed
+- [ ] [Vercel account](https://vercel.com) (free tier)
+- [ ] [Render account](https://render.com) (free tier)
+- [ ] Node.js 22+ locally
 
 ---
 
-## Step 2: Environment Variables
+### Step 1: Deploy Backend to Render
 
-### Server (local: `server/.env`, Vercel: set in dashboard)
+1. **Go to [render.com](https://render.com) → New → Web Service**
+2. **Connect your GitHub repo**
+3. **Configure:**
+   - **Name:** `4ang-backend`
+   - **Region:** Singapore (or nearest)
+   - **Branch:** `main`
+   - **Root Directory:** `server`
+   - **Runtime:** Node
+   - **Build Command:** `npm ci`
+   - **Start Command:** `node src/index.js`
+4. **Add Environment Variables:**
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `PORT` | No | Server port (default: 3001, Vercel ignores this) |
-| `CORS_ORIGINS` | Yes | Comma-separated allowed origins |
-| `JWT_SECRET` | **Yes** | Random secret — generate with `openssl rand -hex 32` |
-| `SUPABASE_URL` | **Yes** | Your Supabase project URL |
-| `SUPABASE_ANON_KEY` | **Yes** | Your Supabase anon key |
-| `SUPABASE_SERVICE_ROLE_KEY` | **Yes** | Your Supabase service role key (NEVER expose to client) |
-| `GOOGLE_CLIENT_ID` | No | Google OAuth client ID |
-| `APPLE_CLIENT_ID` | No | Apple OAuth service ID |
-| `APP_URL` | Yes | Your deployed app URL (e.g. `https://4ang.vercel.app`) |
+| Key | Value |
+|-----|-------|
+| `NODE_ENV` | `production` |
+| `JWT_SECRET` | *(click Generate)* |
+| `DB_PATH` | `/var/data/4ang.sqlite` |
+| `UPLOAD_DIR` | `/var/data/uploads` |
+| `CORS_ORIGINS` | `https://YOUR-PROJECT.vercel.app` |
+| `APP_URL` | `https://YOUR-PROJECT.vercel.app` |
 
-### Client (Vercel: set in dashboard)
+5. **Add Persistent Disk:**
+   - **Name:** `4ang-data`
+   - **Mount Path:** `/var/data`
+   - **Size:** 1 GB
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `VITE_API_URL` | No | Backend URL — leave empty if API is co-located on same domain |
-| `VITE_GOOGLE_CLIENT_ID` | No | Google OAuth client ID (same as server) |
-| `VITE_APPLE_CLIENT_ID` | No | Apple OAuth service ID |
-| `VITE_SUPABASE_URL` | No | Supabase URL for direct client operations |
-| `VITE_SUPABASE_ANON_KEY` | No | Supabase anon key for direct client operations |
+6. **Click Create Web Service** → Wait for deploy
+
+7. **Verify:** Visit `https://YOUR-PROJECT.onrender.com/api/health`
+   - Should return: `{"ok":true,"service":"song-backend"}`
 
 ---
 
-## Step 3: Deploy to Vercel
+### Step 2: Deploy Frontend to Vercel
 
-### Option A: Vercel CLI
+1. **Go to [vercel.com](https://vercel.com) → New Project**
+2. **Import your GitHub repo**
+3. **Configure:**
+   - **Framework Preset:** Vite
+   - **Root Directory:** `./client`
+   - **Build Command:** `npm run build`
+   - **Output Directory:** `dist`
+4. **Add Environment Variables:**
+
+| Key | Value |
+|-----|-------|
+| `VITE_API_URL` | `https://YOUR-PROJECT.onrender.com` |
+
+5. **Click Deploy** → Wait for build
+
+6. **Update Render CORS:**
+   - Go to Render → Environment → Edit
+   - Set `CORS_ORIGINS` to `https://YOUR-PROJECT.vercel.app`
+   - Redeploy
+
+---
+
+### Step 3: Verify
+
+- [ ] Open `https://YOUR-PROJECT.vercel.app`
+- [ ] Auth page loads
+- [ ] Can register / login
+- [ ] Home page loads with tracks
+- [ ] Can play music
+- [ ] Search works
+- [ ] Can upload as artist
+- [ ] Admin dashboard works
+
+---
+
+## Option B: All-in-One on Render
+
+If you want simpler deployment (one service):
+
+1. **Go to Render → New → Web Service**
+2. **Configure:**
+   - **Root Directory:** `.` (project root)
+   - **Build Command:** `npm install && cd client && npm install && npm run build`
+   - **Start Command:** `NODE_ENV=production node server/src/index.js`
+3. **Add Environment Variables:**
+
+| Key | Value |
+|-----|-------|
+| `NODE_ENV` | `production` |
+| `JWT_SECRET` | *(click Generate)* |
+| `DB_PATH` | `/var/data/4ang.sqlite` |
+| `UPLOAD_DIR` | `/var/data/uploads` |
+| `CORS_ORIGINS` | `https://YOUR-PROJECT.onrender.com` |
+| `SERVE_CLIENT` | `true` |
+
+4. **Add Persistent Disk:** `/var/data` (1 GB)
+
+5. **Deploy** → Visit `https://YOUR-PROJECT.onrender.com`
+
+---
+
+## Environment Variables Reference
+
+### Server
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `PORT` | No | `3001` | Server port (Render sets automatically) |
+| `NODE_ENV` | No | `development` | Set to `production` for prod |
+| `JWT_SECRET` | **Yes** | *(default — unsafe)* | Random secret. Generate: `openssl rand -hex 32` |
+| `CORS_ORIGINS` | Yes | `*` | Comma-separated allowed origins |
+| `DB_PATH` | No | `./data/app.sqlite` | SQLite database path |
+| `UPLOAD_DIR` | No | `./uploads` | Local file uploads directory |
+| `APP_URL` | No | `http://localhost:5173` | Frontend URL for auth redirects |
+| `SERVE_CLIENT` | No | `false` | Set `true` to serve client build from Express |
+| `SUPABASE_URL` | No | — | Supabase project URL (for future migration) |
+| `SUPABASE_ANON_KEY` | No | — | Supabase anon key |
+| `SUPABASE_SERVICE_ROLE_KEY` | No | — | Supabase service role key (NEVER expose to client) |
+| `GOOGLE_CLIENT_ID` | No | — | Google OAuth client ID |
+| `APPLE_CLIENT_ID` | No | — | Apple OAuth service ID |
+
+### Client
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `VITE_API_URL` | No | `""` (same origin) | Backend URL. Leave empty if served from same domain |
+| `VITE_SUPABASE_URL` | No | — | Supabase URL for direct client ops |
+| `VITE_SUPABASE_ANON_KEY` | No | — | Supabase anon key |
+| `VITE_GOOGLE_CLIENT_ID` | No | — | Google OAuth client ID |
+| `VITE_APPLE_CLIENT_ID` | No | — | Apple OAuth service ID |
+
+---
+
+## Custom Domain Setup
+
+### Vercel
+1. Go to Project → Settings → Domains
+2. Add your domain (e.g., `4ang.app`)
+3. Update DNS as instructed
+4. SSL is automatic
+
+### Render
+1. Go to Service → Settings → Custom Domains
+2. Add domain
+3. Update DNS CNAME to `YOUR-PROJECT.onrender.com`
+4. SSL is automatic
+
+**After adding custom domain:**
+- Update `CORS_ORIGINS` in Render to include new domain
+- Update `APP_URL` in Render to new domain
+- Update `VITE_API_URL` in Vercel if backend domain changed
+
+---
+
+## Quick Deploy Commands
+
 ```bash
+# Local development
+cd server && npm run dev     # Backend on :3001
+cd client && npm run dev     # Frontend on :5173
+
+# Production build test
+cd client && npm run build   # Builds to client/dist/
+
+# Deploy via CLI (if using Vercel)
 npm i -g vercel
-vercel login
-vercel          # First deploy (preview)
-vercel --prod   # Production deploy
+vercel --prod
+
+# Deploy via CLI (if using Render)
+# Connect GitHub repo → auto-deploy on push
 ```
-
-### Option B: GitHub Integration
-1. [ ] Push code to GitHub
-2. [ ] Go to vercel.com → Import Project
-3. [ ] Select repository
-4. [ ] Set **Root Directory** to `.` (root)
-5. [ ] Set **Framework Preset** to `Other`
-6. [ ] Add environment variables in Project Settings
-7. [ ] Deploy
-
-### Vercel Project Settings
-- **Root Directory**: `.` (project root)
-- **Build Command**: `cd client && npm install && npm run build`
-- **Output Directory**: `client/dist`
-- **Install Command**: `cd client && npm install`
-
----
-
-## Step 4: Post-Deployment Verification
-
-### Authentication
-- [ ] Open deployed URL
-- [ ] See auth page (beautiful botanical design)
-- [ ] Enter email → receive OTP (check server console in dev)
-- [ ] Enter OTP → logged in with success animation
-- [ ] Profile page loads correctly
-- [ ] Can edit profile (display name, bio)
-- [ ] Logout → back to auth page
-
-### Music
-- [ ] Home page loads with featured track
-- [ ] Discover page shows all sections (greeting, mood, genres, trending)
-- [ ] Play a track → mini player appears
-- [ ] Full player opens with lyrics
-- [ ] Previous/Next/Seek/Volume all work
-- [ ] Shuffle and Repeat toggle correctly
-
-### Search
-- [ ] Search input works
-- [ ] Vietnamese diacritics normalized ("me" → "Mẹ")
-- [ ] Results show songs, artists, playlists
-- [ ] Click result → plays track
-
-### Library
-- [ ] Liked Songs tab shows liked tracks
-- [ ] Recently Played shows history
-- [ ] Can like/unlike tracks
-- [ ] Can save/unsave tracks
-
-### Artist
-- [ ] Artist Profile page loads with tracks
-- [ ] Follow/unfollow artist works
-- [ ] Artist Dashboard accessible for artists
-- [ ] Music submission flow works
-
-### Admin
-- [ ] First user is auto-admin
-- [ ] Admin Dashboard accessible at `/admin`
-- [ ] Can review submissions
-- [ ] Can approve/reject
-
----
-
-## Security Checklist
-
-- [ ] `JWT_SECRET` is a strong random value (not default)
-- [ ] `SUPABASE_SERVICE_ROLE_KEY` is NEVER in client code
-- [ ] `.env` files are in `.gitignore`
-- [ ] RLS enabled on all Supabase tables
-- [ ] File uploads validated (type + size)
-- [ ] CORS configured for production domain only
-- [ ] Admin authorization enforced server-side
-- [ ] No secrets committed to git
-
----
-
-## Build Stats
-
-| Metric | Value |
-|--------|-------|
-| Main bundle | 349 KB (105 KB gzip) |
-| Admin bundle | 416 KB (117 KB gzip) |
-| Code-split chunks | 17 (loaded on demand) |
-| Icon library | 130 KB (42 KB gzip) |
-| Total pages | 16 |
-| Build time | ~850ms |
 
 ---
 
@@ -183,40 +215,24 @@ vercel --prod   # Production deploy
 
 | Issue | Solution |
 |-------|----------|
-| 401 on all requests | Check `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` |
-| OTP not received | Check server console logs for OTP codes (dev mode) |
-| CORS error | Add your Vercel domain to `CORS_ORIGINS` |
-| Upload fails | Check Supabase Storage buckets exist |
-| Auth page blank | Check `VITE_API_URL` is correct or empty for same-domain |
+| 401 on all requests | Check `JWT_SECRET` is set and strong |
+| CORS error | Add frontend domain to `CORS_ORIGINS` |
+| "Cannot find module" | Ensure Node.js 22+ (check `engines` in package.json) |
+| Upload fails | Check `UPLOAD_DIR` path exists and is writable |
+| Database locked | Only one process should access SQLite file |
 | Build fails | Run `npm install` in both `client/` and `server/` |
-| "Cannot find module" | Ensure Node.js 22+ is used |
-| Google login fails | Check `GOOGLE_CLIENT_ID` matches Google Cloud Console |
-| Dark mode broken | Clear localStorage and reload |
+| Blank page | Check `VITE_API_URL` is correct |
+| Auth redirect wrong | Update `APP_URL` in server env |
+| Slow first load | Render free tier spins down — first request takes ~30s |
 
 ---
 
-## File Structure
+## Security Checklist
 
-```
-4ang/
-├── client/                    # React frontend (Vite)
-│   ├── src/
-│   │   ├── pages/            # 16 page components (lazy-loaded)
-│   │   ├── components/       # Shared UI components
-│   │   ├── styles/           # CSS (tokens, layout, components)
-│   │   ├── api.js            # API wrapper
-│   │   └── lib/              # Utilities
-│   └── dist/                 # Production build output
-├── server/                    # Express API backend
-│   ├── src/
-│   │   ├── routes/           # API routes
-│   │   ├── db.js             # SQLite + Supabase dual-mode
-│   │   ├── auth.js           # JWT auth middleware
-│   │   ├── supabase.js       # Supabase client
-│   │   └── index.js          # Express server entry
-│   ├── supabase-migration.sql # Database schema
-│   └── .env                  # Server environment
-├── vercel.json               # Vercel deployment config
-├── package.json              # Root build script
-└── DEPLOY.md                 # This file
-```
+- [ ] `JWT_SECRET` is a strong random value (not the default)
+- [ ] `.env` files are in `.gitignore`
+- [ ] `SUPABASE_SERVICE_ROLE_KEY` is NEVER in client code
+- [ ] CORS configured for production domain only
+- [ ] File uploads validated (type + size)
+- [ ] Admin authorization enforced server-side
+- [ ] No secrets committed to git

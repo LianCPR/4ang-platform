@@ -170,9 +170,9 @@ router.post("/me/avatar", requireAuth, (req, res) => {
       if (!row) return res.status(404).json({ error: "Bạn chưa có hồ sơ nghệ sĩ." });
       if (!req.file) return res.status(400).json({ error: "Cần chọn ảnh." });
       const old = row.avatar_filename;
-      const filePath = await uploadFile("artist-images", req.user.username, req.file.buffer, req.file.mimetype, req.file.originalname);
+      const filePath = await uploadFile("avatars", req.user.username, req.file.buffer, req.file.mimetype, req.file.originalname);
       db.prepare("UPDATE artist_profiles SET avatar_filename = ? WHERE username = ?").run(filePath.path, req.user.username);
-      if (old) deleteFile("artist-images", old);
+      if (old) deleteFile("avatars", old);
       res.json({ artist: shapeArtistProfile(db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.user.username)) });
     } catch (e) {
       console.error("[avatar upload]", e);
@@ -189,9 +189,9 @@ router.post("/me/cover", requireAuth, (req, res) => {
       if (!row) return res.status(404).json({ error: "Bạn chưa có hồ sơ nghệ sĩ." });
       if (!req.file) return res.status(400).json({ error: "Cần chọn ảnh." });
       const old = row.cover_filename;
-      const filePath = await uploadFile("artist-images", req.user.username, req.file.buffer, req.file.mimetype, req.file.originalname);
+      const filePath = await uploadFile("artwork", req.user.username, req.file.buffer, req.file.mimetype, req.file.originalname);
       db.prepare("UPDATE artist_profiles SET cover_filename = ? WHERE username = ?").run(filePath.path, req.user.username);
-      if (old) deleteFile("artist-images", old);
+      if (old) deleteFile("artwork", old);
       res.json({ artist: shapeArtistProfile(db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.user.username)) });
     } catch (e) {
       console.error("[cover upload]", e);
@@ -210,6 +210,26 @@ router.post("/me/verification-request", requireAuth, (req, res) => {
   res.json({ artist: shapeArtistProfile(db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.user.username)) });
 });
 
+// All artists — for onboarding and discovery. Returns all registered
+// artists sorted by follower count (most popular first).
+router.get("/all", (req, res) => {
+  const rows = db.prepare(
+    "SELECT ap.username, ap.artist_name, ap.avatar_filename, ap.cover_filename, ap.bio, ap.genres, ap.verification_status, (SELECT COUNT(*) FROM artist_follows af WHERE af.artist_username = ap.username) AS follower_count FROM artist_profiles ap ORDER BY follower_count DESC, ap.artist_name ASC"
+  ).all();
+  res.json({
+    artists: rows.map((r) => ({
+      username: r.username,
+      artistName: r.artist_name,
+      avatarUrl: r.avatar_filename ? "/api/avatars/" + r.avatar_filename : null,
+      coverUrl: r.cover_filename ? "/api/artwork/" + r.cover_filename : null,
+      bio: r.bio || "",
+      genres: JSON.parse(r.genres || "[]"),
+      verificationStatus: r.verification_status,
+      followerCount: r.follower_count || 0,
+    })),
+  });
+});
+
 // Backs the submission Artist Credits selector (§14/§54) — real registered
 // profiles only, never free text, so a "Producer" credit is exactly as
 // reliable as any other structured artist reference in the app. Public:
@@ -225,7 +245,7 @@ router.get("/search", (req, res) => {
     artists: rows.map((r) => ({
       username: r.username,
       artistName: r.artist_name,
-      avatarUrl: r.avatar_filename ? "/api/artist-images/" + r.avatar_filename : null,
+      avatarUrl: r.avatar_filename ? "/api/avatars/" + r.avatar_filename : null,
       badge: r.verification_status === "verified" ? "verified" : "independent",
     })),
   });

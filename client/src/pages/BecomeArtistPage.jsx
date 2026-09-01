@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ArrowLeft, Upload, X, Plus, Check, Music, Users, BarChart3, Headphones, Star, ExternalLink, Camera } from "lucide-react";
 import { api } from "../api";
@@ -41,11 +41,11 @@ export default function BecomeArtistPage({ session, showToast, onBack, onArtistC
   const fileRef = useRef(null);
 
   // Check for existing application
-  useState(() => {
+  useEffect(() => {
     api.myArtistApplication().then((res) => {
       if (res.application) setExistingApp(res.application);
     }).catch(() => {});
-  });
+  }, []);
 
   function toggleGenre(g) {
     setGenres((gs) => gs.includes(g) ? gs.filter((x) => x !== g) : gs.length >= 5 ? gs : [...gs, g]);
@@ -105,8 +105,8 @@ export default function BecomeArtistPage({ session, showToast, onBack, onArtistC
     setBusy(false);
   }
 
-  // Success state
-  if (success) {
+  // Already submitted — show thank-you card (no form)
+  if (existingApp && (existingApp.status === "pending" || existingApp.status === "under_review")) {
     return (
       <div className="ba-page">
         <div className="ba-bg-decor">
@@ -115,25 +115,75 @@ export default function BecomeArtistPage({ session, showToast, onBack, onArtistC
           <div className="ba-decor-br"><RoseCluster size={60} /></div>
           <div className="ba-decor-bl"><Butterfly size={24} style={{ opacity: 0.15, color: "var(--c-sage)" }} /></div>
         </div>
-        <motion.div className="ba-success" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
-          <div className="ba-success-icon">
-            <Star size={32} style={{ color: "var(--c-gold)" }} />
+        <div className="ba-back">
+          <button type="button" className="link-btn" onClick={onBack}>
+            <ArrowLeft size={16} /> Quay lại hồ sơ
+          </button>
+        </div>
+        <motion.div className="ba-letter" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}>
+          <div className="ba-letter-stamp">
+            <Star size={18} style={{ color: "var(--c-gold)" }} />
           </div>
-          <h2>Yêu cầu đã được gửi</h2>
-          <p>4ANG đã nhận được yêu cầu của bạn. Đội ngũ 4ANG sẽ xem xét thông tin và phản hồi trong vòng tối đa 24 giờ. Bạn sẽ nhận được thông báo trong 4ANG và email chính thức khi yêu cầu được chấp thuận.</p>
-          <div className="ba-pending-status">
-            <div className="ba-pending-label">PENDING REVIEW</div>
+          <div className="ba-letter-date">
+            {new Date(existingApp.submittedAt || Date.now()).toLocaleDateString("vi-VN", { day: "2-digit", month: "long", year: "numeric" })}
+          </div>
+          <h2 className="ba-letter-title">Cảm ơn bạn đã đăng ký trở thành nghệ sĩ trên 4ANG</h2>
+          <div className="ba-letter-body">
+            <p>Chào {existingApp.artistName || session?.displayName || session?.username},</p>
+            <p>Yêu cầu của bạn đã được tiếp nhận và đang trong quá trình xem xét bởi đội ngũ 4ANG. Chúng tôi sẽ phản hồi trong vòng <strong>24 giờ</strong>.</p>
+            <p>Khi được chấp thuận, bạn sẽ nhận được thông báo trực tiếp trên 4ANG cùng email xác nhận chính thức.</p>
+            <p>Trong lúc chờ đợi, bạn có thể tiếp tục khám phá âm nhạc trên 4ANG.</p>
+          </div>
+          <div className="ba-letter-status">
+            <div className="ba-pending-label">ĐANG XEM XÉT</div>
             <div className="ba-pending-detail">
-              <span>Submitted:</span>
-              <span>{existingApp?.submittedAt ? new Date(existingApp.submittedAt).toLocaleString("vi-VN") : "—"}</span>
+              <span>Ngày gửi:</span>
+              <span>{existingApp.submittedAt ? new Date(existingApp.submittedAt).toLocaleString("vi-VN") : "—"}</span>
             </div>
             <div className="ba-pending-detail">
-              <span>Expected review:</span>
-              <span>Within 24 hours</span>
+              <span>Thời gian xử lý:</span>
+              <span>Trong vòng 24 giờ</span>
             </div>
           </div>
-          <div className="ba-success-actions">
+          <div className="ba-letter-sign">
+            <span>Đội ngũ 4ANG</span>
+          </div>
+          <div className="ba-letter-actions">
             <button type="button" className="btn-primary" onClick={onBack}>Tiếp tục khám phá</button>
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
+
+  // Rejected — show rejection message + option to resubmit
+  if (existingApp && existingApp.status === "rejected") {
+    return (
+      <div className="ba-page">
+        <div className="ba-bg-decor">
+          <div className="ba-decor-tl"><Vine size={120} direction="right" /></div>
+          <div className="ba-decor-tr"><Flower size={40} style={{ opacity: 0.12, color: "var(--c-rose)" }} /></div>
+          <div className="ba-decor-br"><RoseCluster size={60} /></div>
+          <div className="ba-decor-bl"><Butterfly size={24} style={{ opacity: 0.15, color: "var(--c-sage)" }} /></div>
+        </div>
+        <div className="ba-back">
+          <button type="button" className="link-btn" onClick={onBack}>
+            <ArrowLeft size={16} /> Quay lại hồ sơ
+          </button>
+        </div>
+        <motion.div className="ba-letter ba-letter-rejected" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
+          <h2 className="ba-letter-title">Yêu cầu chưa được chấp thuận</h2>
+          <div className="ba-letter-body">
+            <p>Chào {existingApp.artistName || session?.displayName || session?.username},</p>
+            <p>Rất tiếc, yêu cầu đăng ký nghệ sĩ của bạn chưa được chấp thuận lần này.</p>
+            {existingApp.reviewNote && (
+              <p className="ba-letter-reject-reason"><strong>Lý do:</strong> {existingApp.reviewNote}</p>
+            )}
+            <p>Bạn có thể chỉnh sửa thông tin và gửi lại yêu cầu.</p>
+          </div>
+          <div className="ba-letter-actions">
+            <button type="button" className="btn-secondary" onClick={onBack}>Quay lại hồ sơ</button>
+            <button type="button" className="btn-primary" onClick={() => setExistingApp(null)}>Gửi lại yêu cầu</button>
           </div>
         </motion.div>
       </div>
@@ -157,29 +207,6 @@ export default function BecomeArtistPage({ session, showToast, onBack, onArtistC
           <ArrowLeft size={16} /> Quay lại hồ sơ
         </button>
       </div>
-
-      {/* Pending Application State */}
-      {existingApp && !success && (
-        <motion.div className="ba-pending-application" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-          <div className="ba-pending-status">
-            <div className="ba-pending-label">PENDING REVIEW</div>
-            <div className="ba-pending-detail">
-              <span>Submitted:</span>
-              <span>{existingApp.submittedAt ? new Date(existingApp.submittedAt).toLocaleString("vi-VN") : "—"}</span>
-            </div>
-            <div className="ba-pending-detail">
-              <span>Expected review:</span>
-              <span>Within 24 hours</span>
-            </div>
-            {existingApp.status === "rejected" && existingApp.reviewNote && (
-              <div className="ba-pending-reject-note">
-                <span>Lý do:</span>
-                <span>{existingApp.reviewNote}</span>
-              </div>
-            )}
-          </div>
-        </motion.div>
-      )}
 
       {/* Hero */}
       <motion.section className="ba-hero" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>

@@ -282,4 +282,12 @@ export const api = {
 
   // --- Delete single search history item ---
   deleteSearchHistoryItem: (query) => request("/library/search-history/item", { method: "POST", body: { query } }),
+
+  // --- Onboarding Preferences ---
+  getPreferences: () => request("/auth/preferences"),
+  savePreferences: (prefs) => request("/auth/preferences", { method: "POST", body: prefs }),
+  completeOnboarding: () => request("/auth/complete-onboarding", { method: "POST" }),
+
+  // --- All Artists (for onboarding) ---
+  fetchAllArtists: () => request("/artists/all"),
 };

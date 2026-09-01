@@ -1,24 +1,70 @@
 services:
   - type: web
-    name: song-backend
+    name: 4ang-backend
     runtime: node
     plan: starter
     rootDir: server
     buildCommand: npm ci
-    startCommand: npm start
+    startCommand: node src/index.js
     healthCheckPath: /api/health
+    autoDeploy: true
     envVars:
+      # Core
+      - key: NODE_ENV
+        value: production
       - key: NODE_VERSION
         value: 22.16.0
+      - key: PORT
+        value: 10000
       - key: JWT_SECRET
         generateValue: true
+
+      # Database (SQLite on persistent disk)
       - key: DB_PATH
-        value: /var/data/app.sqlite
+        value: /var/data/4ang.sqlite
+
+      # File uploads (local disk fallback)
       - key: UPLOAD_DIR
         value: /var/data/uploads
+
+      # CORS — update with your Vercel domain
       - key: CORS_ORIGINS
+        value: https://4ang.vercel.app,http://localhost:5173
+
+      # App URL (for auth redirects)
+      - key: APP_URL
+        value: https://4ang.vercel.app
+
+      # Supabase (optional — leave blank to use SQLite only)
+      - key: SUPABASE_URL
         sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+
+      # OAuth (optional)
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: APPLE_CLIENT_ID
+        sync: false
+
     disk:
-      name: song-data
+      name: 4ang-data
       mountPath: /var/data
       sizeGB: 1
+
+    # Deploy on every push to main
+    deployOnCommit: true
+
+# Optional: separate service for frontend if not using Vercel
+# Uncomment below to also deploy frontend on Render (as static site)
+# - type: static_site
+#   name: 4ang-frontend
+#   rootDir: client
+#   buildCommand: npm install && npm run build
+#   staticPublishPath: dist
+#   routes:
+#     - type: rewrite
+#       source: /api/*
+#       destination: https://4ang-backend.onrender.com/api/*

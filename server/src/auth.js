@@ -25,72 +25,86 @@ export async function requireAuth(req, res, next) {
   const token = extractToken(req);
   if (!token) return res.status(401).json({ error: "Chưa đăng nhập." });
 
-  // Supabase Auth token
+  // 1) Try Supabase Auth first (if configured)
   if (USE_SUPABASE && isSupabaseToken(token)) {
     try {
       const supabaseUser = await verifyToken(token);
-      if (!supabaseUser) {
-        return res.status(401).json({ error: "Phiên đăng nhập không hợp lệ hoặc đã hết hạn." });
+      if (supabaseUser) {
+        const profile = await getProfile(supabaseUser.id);
+        if (profile) {
+          if (profile.is_restricted) {
+            return res.status(403).json({ error: "Tài khoản của bạn đã bị hạn chế." });
+          }
+          req.user = {
+            id: supabaseUser.id,
+            username: profile.username,
+            email: supabaseUser.email,
+            isAdmin: profile.role === "admin",
+            isArtist: profile.role === "artist",
+            profile,
+          };
+          return next();
+        }
+        // Supabase user exists but no profile — fall through to legacy
       }
-      const profile = await getProfile(supabaseUser.id);
-      if (!profile) {
-        return res.status(401).json({ error: "Tài khoản không tồn tại." });
-      }
-      if (profile.is_restricted) {
-        return res.status(403).json({ error: "Tài khoản của bạn đã bị hạn chế." });
-      }
-      req.user = {
-        id: supabaseUser.id,
-        username: profile.username,
-        email: supabaseUser.email,
-        isAdmin: profile.role === "admin",
-        isArtist: profile.role === "artist",
-        profile,
-      };
-      return next();
     } catch (e) {
-      return res.status(401).json({ error: "Phiên đăng nhập không hợp lệ hoặc đã hết hạn." });
+      // Supabase verification failed — likely a legacy JWT, fall through
     }
   }
 
-  // Fallback to legacy JWT (for migration period)
-  if (!USE_SUPABASE) {
-    try {
-      req.user = jwt.verify(token, JWT_SECRET);
-      return next();
-    } catch (e) {
-      return res.status(401).json({ error: "Phiên đăng nhập không hợp lệ." });
-    }
+  // 2) Fallback to legacy JWT
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = {
+      ...decoded,
+      isAdmin: !!decoded.is_admin || !!decoded.isAdmin,
+      isArtist: !!decoded.is_artist || !!decoded.isArtist,
+    };
+    return next();
+  } catch (e) {
+    return res.status(401).json({ error: "Phiên đăng nhập không hợp lệ." });
   }
-
-  return res.status(401).json({ error: "Phiên đăng nhập không hợp lệ." });
 }
 
-export function optionalAuth(req, res, next) {
+export async function optionalAuth(req, res, next) {
   const token = extractToken(req);
-  if (token && USE_SUPABASE && isSupabaseToken(token)) {
-    verifyToken(token).then((user) => {
-      if (user) {
-        getProfile(user.id).then((profile) => {
-          if (profile) {
-            req.user = {
-              id: user.id,
-              username: profile.username,
-              email: user.email,
-              isAdmin: profile.role === "admin",
-              isArtist: profile.role === "artist",
-              profile,
-            };
-          }
-          next();
-        }).catch(() => next());
-      } else {
-        next();
+  if (!token) return next();
+
+  // 1) Try Supabase first
+  if (USE_SUPABASE && isSupabaseToken(token)) {
+    try {
+      const supabaseUser = await verifyToken(token);
+      if (supabaseUser) {
+        const profile = await getProfile(supabaseUser.id);
+        if (profile) {
+          req.user = {
+            id: supabaseUser.id,
+            username: profile.username,
+            email: supabaseUser.email,
+            isAdmin: profile.role === "admin",
+            isArtist: profile.role === "artist",
+            profile,
+          };
+          return next();
+        }
       }
-    }).catch(() => next());
-  } else {
-    next();
+    } catch (e) {
+      // Supabase failed — fall through to legacy
+    }
   }
+
+  // 2) Fallback to legacy JWT
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = {
+      ...decoded,
+      isAdmin: !!decoded.is_admin || !!decoded.isAdmin,
+      isArtist: !!decoded.is_artist || !!decoded.isArtist,
+    };
+  } catch (e) {
+    // invalid token — continue without auth
+  }
+  next();
 }
 
 export function requireAdmin(req, res, next) {

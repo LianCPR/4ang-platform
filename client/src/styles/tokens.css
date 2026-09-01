@@ -47,6 +47,7 @@
   --success: var(--c-sage-deep);
   --danger: #C25A5A;
   --pending: var(--c-gold);
+  --info: #4A8FE2;
 
   /* ── Typography ── */
   --font-serif: "Playfair Display", "Cormorant Garamond", "Georgia", "Times New Roman", serif;

@@ -119,7 +119,7 @@ router.get("/search", (req, res) => {
   ).all().map((r) => ({
     username: r.username,
     artistName: r.artist_name,
-    avatarUrl: r.avatar_filename ? "/api/artist-images/" + r.avatar_filename : null,
+    avatarUrl: r.avatar_filename ? "/api/avatars/" + r.avatar_filename : null,
     badge: r.verification_status === "verified" ? "verified" : "independent",
   }));
   const artists = allArtists.filter((a) => {

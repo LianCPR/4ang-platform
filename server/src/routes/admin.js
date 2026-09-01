@@ -1,5 +1,6 @@
 import express from "express";
-import { db, shapeTrack, shapeArtistProfile, shapePublicUserSummary, recordAdminAudit, shapeAuditEntry, getSetting, setSetting } from "../db.js";
+import { randomUUID } from "node:crypto";
+import { db, shapeTrack, shapeArtistProfile, shapePublicUserSummary, recordAdminAudit, shapeAuditEntry, shapeArtistApplication, shapeVerifiedArtistApplication, createNotification, getSetting, setSetting } from "../db.js";
 import { requireAuth, requireAdmin } from "../auth.js";
 import { rateLimit } from "../rateLimit.js";
 import { GENRES } from "./artists.js";
@@ -305,6 +306,49 @@ router.get("/audit-log", (req, res) => {
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
   const rows = db.prepare("SELECT * FROM admin_audit_log ORDER BY created_at DESC LIMIT ?").all(limit);
   res.json({ entries: rows.map(shapeAuditEntry) });
+});
+
+// ═══════════════════════════════════════════════════════════
+// ADMIN: Artist Applications
+// ═══════════════════════════════════════════════════════════
+
+router.get("/artist-applications", (req, res) => {
+  const status = (req.query.status || "pending").trim();
+  const rows = status === "all"
+    ? db.prepare("SELECT * FROM artist_applications ORDER BY submitted_at DESC").all()
+    : db.prepare("SELECT * FROM artist_applications WHERE status = ? ORDER BY submitted_at ASC").all(status);
+  res.json({ applications: rows.map(shapeArtistApplication) });
+});
+
+router.post("/artist-applications/:id/approve", (req, res) => {
+  const app = db.prepare("SELECT * FROM artist_applications WHERE id = ?").get(req.params.id);
+  if (!app) return res.status(404).json({ error: "Không tìm thấy yêu cầu." });
+  if (app.status !== "pending") return res.status(409).json({ error: "Yêu cầu đã được xử lý." });
+  const now = Date.now();
+  db.prepare("UPDATE artist_applications SET status = 'approved', reviewed_at = ?, reviewed_by = ? WHERE id = ?").run(now, req.user.username, req.params.id);
+  const existingArtist = db.prepare("SELECT username FROM artist_profiles WHERE username = ?").get(app.username);
+  if (!existingArtist) {
+    db.prepare(`INSERT INTO artist_profiles (username, artist_name, bio, genres, links, verification_status, created_at) VALUES (?, ?, ?, ?, ?, 'independent', ?)`)
+      .run(app.username, app.artist_name, app.bio, JSON.stringify(app.main_genre ? [app.main_genre] : []), app.social_links, now);
+  }
+  db.prepare("UPDATE users SET is_artist = 1 WHERE id = ?").run(app.user_id);
+  createNotification(app.username, "ARTIST_APPROVED", "Chào mừng bạn đến với 4ANG Artist", "Yêu cầu trở thành Nghệ sĩ của bạn đã được chấp thuận.", { actorUsername: req.user.username, targetType: "artist_application", targetId: app.id });
+  recordAdminAudit(req.user.username, "artist_application_approved", "artist_application", app.id, { artistName: app.artist_name, username: app.username });
+  const updated = db.prepare("SELECT * FROM artist_applications WHERE id = ?").get(req.params.id);
+  res.json({ application: shapeArtistApplication(updated) });
+});
+
+router.post("/artist-applications/:id/reject", (req, res) => {
+  const app = db.prepare("SELECT * FROM artist_applications WHERE id = ?").get(req.params.id);
+  if (!app) return res.status(404).json({ error: "Không tìm thấy yêu cầu." });
+  if (app.status !== "pending") return res.status(409).json({ error: "Yêu cầu đã được xử lý." });
+  const note = ((req.body && req.body.note) || "").trim().slice(0, 500);
+  const now = Date.now();
+  db.prepare("UPDATE artist_applications SET status = 'rejected', review_note = ?, reviewed_at = ?, reviewed_by = ? WHERE id = ?").run(note || null, now, req.user.username, req.params.id);
+  createNotification(app.username, "ARTIST_REJECTED", "Yêu cầu chưa được chấp thuận", "Vui lòng xem chi tiết trong hồ sơ.", { actorUsername: req.user.username, targetType: "artist_application", targetId: app.id });
+  recordAdminAudit(req.user.username, "artist_application_rejected", "artist_application", app.id, { note: note || null });
+  const updated = db.prepare("SELECT * FROM artist_applications WHERE id = ?").get(req.params.id);
+  res.json({ application: shapeArtistApplication(updated) });
 });
 
 export default router;

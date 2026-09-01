@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
-import { ArrowLeft, Moon, Sun, Volume2, Music, Globe, Eye, EyeOff, Bell, Download, Trash2 } from "lucide-react";
+import { ArrowLeft, Moon, Sun, Volume2, Music, Globe, Eye, EyeOff, Bell, Download, Trash2, Sparkles } from "lucide-react";
 import { lsGet, lsSet } from "../storage";
 
 const LANGUAGES = [
@@ -37,7 +37,7 @@ function SettingsRow({ label, desc, children }) {
   );
 }
 
-export default function SettingsPage({ session, showToast, onBack }) {
+export default function SettingsPage({ session, showToast, onBack, onOpenOnboarding }) {
   const [darkMode, setDarkMode] = useState(() => document.documentElement.getAttribute("data-theme") === "dark");
   const [explicitContent, setExplicitContent] = useState(() => lsGet("settings_explicit", true));
   const [autoplay, setAutoplay] = useState(() => lsGet("settings_autoplay", true));
@@ -109,6 +109,17 @@ export default function SettingsPage({ session, showToast, onBack }) {
           <SettingsRow label="Tên người dùng" desc={session?.username || "—"} />
           <SettingsRow label="Vai trò" desc={session?.isAdmin ? "Admin" : session?.isArtist ? "Nghệ sĩ" : "Người dùng"} />
         </SettingsSection>
+
+        {/* Personalization */}
+        {onOpenOnboarding && (
+          <SettingsSection title="Cá nhân hóa">
+            <SettingsRow label="Thiết lập sở thích" desc="Chọn thể loại và nghệ sĩ yêu thích để 4ANG gợi ý nhạc phù hợp">
+              <button type="button" className="settings-action-btn" onClick={onOpenOnboarding}>
+                <Sparkles size={14} /> Thiết lập
+              </button>
+            </SettingsRow>
+          </SettingsSection>
+        )}
 
         {/* Danger Zone */}
         <SettingsSection title="Nguy hiểm">

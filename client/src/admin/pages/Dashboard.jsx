@@ -9,9 +9,12 @@ import EmptyState from "../../components/EmptyState.jsx";
 import { timeAgo } from "../../lib/format.js";
 
 const ACTION_LABELS = {
-  reviewed: "bắt đầu xem xét", approved: "duyệt", rejected: "từ chối", changes_requested: "yêu cầu chỉnh sửa",
+  reviewed: "bắt đầu xem xét", review_started: "bắt đầu xem xét",
+  approved: "duyệt", rejected: "từ chối", changes_requested: "yêu cầu chỉnh sửa",
   published: "phát hành", user_restricted: "hạn chế tài khoản", user_restored: "gỡ hạn chế tài khoản",
   artist_verified: "xác minh nghệ sĩ", artist_verification_rejected: "từ chối xác minh",
+  artist_application_approved: "chấp thuận hồ sơ nghệ sĩ", artist_application_rejected: "từ chối hồ sơ nghệ sĩ",
+  verified_artist_approved: "xác minh nghệ sĩ", verified_artist_rejected: "từ chối xác minh nghệ sĩ",
   track_unpublished: "gỡ bài hát", track_republished: "phát hành lại bài hát", track_metadata_edited: "sửa thông tin bài hát",
   report_resolved: "xử lý báo cáo", report_dismissed: "bỏ qua báo cáo",
   submissions_paused: "tạm dừng nhận bài gửi", submissions_resumed: "mở lại nhận bài gửi",

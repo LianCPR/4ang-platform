@@ -7,9 +7,8 @@
  *
  * Buckets:
  *   audio          — submission audio (private)
- *   artwork        — submission covers (public)
+ *   artwork        — submission covers & artist covers (public)
  *   avatars        — user & artist avatars (public)
- *   artist-images  — artist cover images (public)
  *   videos         — submission videos (private)
  */
 import path from "node:path";
@@ -26,7 +25,6 @@ const LOCAL_DIRS = {
   audio: LOCAL_BASE,
   artwork: path.join(LOCAL_BASE, "covers"),
   avatars: path.join(LOCAL_BASE, "avatars"),
-  "artist-images": path.join(LOCAL_BASE, "artist-images"),
   videos: path.join(LOCAL_BASE, "videos"),
 };
 
@@ -53,13 +51,13 @@ function extForMime(mime, whitelist) {
 // ── Size limits ────────────────────────────────────────────────
 export const MAX_AUDIO_BYTES = 30 * 1024 * 1024;   // 30 MB
 export const MAX_COVER_BYTES = 8 * 1024 * 1024;     // 8 MB
-export const MAX_VIDEO_BYTES = 150 * 1022 * 1024;   // 150 MB
+export const MAX_VIDEO_BYTES = 150 * 1024 * 1024;   // 150 MB
 
 // ── Upload functions ──────────────────────────────────────────
 
 /**
  * Upload a buffer to Supabase Storage.
- * @param {string} bucket - Bucket name (audio|artwork|avatars|artist-images|videos)
+ * @param {string} bucket - Bucket name (audio|artwork|avatars|videos)
  * @param {string} userId - User ID or username for path prefix
  * @param {Buffer} buffer - File contents
  * @param {string} mimeType - MIME type
@@ -83,7 +81,7 @@ export async function uploadFile(bucket, userId, buffer, mimeType, originalName)
 
     // Get public URL for public buckets, signed URL for private
     let url;
-    if (bucket === "artwork" || bucket === "avatars" || bucket === "artist-images") {
+    if (bucket === "artwork" || bucket === "avatars") {
       const { data: pubData } = supabaseAdmin.storage.from(bucket).getPublicUrl(filePath);
       url = pubData?.publicUrl || "";
     } else {
@@ -130,7 +128,7 @@ export async function getFileUrl(bucket, filePath) {
   if (!filePath) return null;
 
   if (supabaseReady()) {
-    if (bucket === "artwork" || bucket === "avatars" || bucket === "artist-images") {
+    if (bucket === "artwork" || bucket === "avatars") {
       const { data } = supabaseAdmin.storage.from(bucket).getPublicUrl(filePath);
       return data?.publicUrl || null;
     }
@@ -151,8 +149,7 @@ function getWhitelist(bucket) {
   switch (bucket) {
     case "audio": return AUDIO_EXT;
     case "artwork":
-    case "avatars":
-    case "artist-images": return IMAGE_EXT;
+    case "avatars": return IMAGE_EXT;
     case "videos": return VIDEO_EXT;
     default: return {};
   }
