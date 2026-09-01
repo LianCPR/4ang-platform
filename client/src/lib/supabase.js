@@ -29,40 +29,32 @@ export async function getSupabaseToken() {
 }
 
 /**
- * Sign up with email/password.
- */
-export async function signUp(email, password, metadata = {}) {
-  if (!supabase) throw new Error("Supabase not configured");
-  const { data, error } = await supabase.auth.signUp({
-    email,
-    password,
-    options: { data: metadata },
-  });
-  if (error) throw error;
-  return data;
-}
-
-/**
- * Sign in with email/password.
- */
-export async function signIn(email, password) {
-  if (!supabase) throw new Error("Supabase not configured");
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email,
-    password,
-  });
-  if (error) throw error;
-  return data;
-}
-
-/**
- * Sign in with OTP (magic link or phone).
+ * Send email OTP via Supabase Auth (real email, not custom).
  */
 export async function signInWithOtp(email) {
   if (!supabase) throw new Error("Supabase not configured");
-  const { data, error } = await supabase.auth.signInWithOtp({ email });
+  const { data, error } = await supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: true } });
   if (error) throw error;
   return data;
+}
+
+/**
+ * Verify email OTP and return Supabase session.
+ */
+export async function verifyEmailOtp(email, token) {
+  if (!supabase) throw new Error("Supabase not configured");
+  const { data, error } = await supabase.auth.verifyOtp({ email, token, type: "email" });
+  if (error) throw error;
+  return data; // { session, user }
+}
+
+/**
+ * Get current Supabase session (for API calls + state restoration).
+ */
+export async function getCurrentSupabaseSession() {
+  if (!supabase) return null;
+  const { data: { session } } = await supabase.auth.getSession();
+  return session;
 }
 
 /**

@@ -631,6 +631,84 @@ router.get("/me", requireAuth, (req, res) => {
   res.json({ user: publicUser(user) });
 });
 
+// ─── Sync Profile (after Supabase Auth OTP verify) ────────────
+// Frontend calls this after supabase.auth.verifyOtp() succeeds.
+// We receive the Supabase JWT, verify it, create/sync the profile,
+// and return a backend JWT for API calls.
+
+router.post("/sync-profile", requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const email = req.user.email || null;
+
+    if (USE_SUPABASE) {
+      // Check if profile exists
+      const { data: existing } = await supabaseAdmin
+        .from("profiles").select("*").eq("id", userId).single();
+
+      let profile = existing;
+
+      if (!profile) {
+        // Create new profile — first user becomes admin
+        const uname = usernameFromSeed((email || "user").split("@")[0]);
+        const { count } = await supabaseAdmin
+          .from("profiles").select("*", { count: "exact", head: true });
+        const { data: newProfile, error: insertErr } = await supabaseAdmin
+          .from("profiles").insert({
+            id: userId,
+            username: uname,
+            display_name: email?.split("@")[0] || uname,
+            email: email,
+            role: (count || 0) === 0 ? "admin" : "user",
+            email_verified: true,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          }).select("*").single();
+        if (insertErr) {
+          console.error("[SYNC-PROFILE] insert error:", insertErr.message);
+          return res.status(500).json({ error: "Lỗi tạo hồ sơ." });
+        }
+        profile = newProfile;
+      } else {
+        // Mark email as verified if not already
+        if (!profile.email_verified && email) {
+          await supabaseAdmin
+            .from("profiles").update({ email_verified: true, updated_at: new Date().toISOString() })
+            .eq("id", userId);
+          profile.email_verified = true;
+        }
+      }
+
+      // Generate backend JWT (our API calls use this)
+      const token = signToken({ id: userId, username: profile.username });
+
+      return res.json({
+        token,
+        user: {
+          username: profile.username,
+          displayName: profile.display_name,
+          isAdmin: profile.role === "admin",
+          isArtist: profile.role === "artist",
+          onboardingCompleted: !!profile.onboarding_completed,
+          email: profile.email || email,
+          emailVerified: !!profile.email_verified,
+          authProvider: "email",
+        },
+        isNewUser: !existing,
+      });
+    }
+
+    // Legacy SQLite path — req.user already has the data from requireAuth
+    const user = db.prepare("SELECT * FROM users WHERE username = ?").get(req.user.username);
+    if (!user) return res.status(404).json({ error: "Không tìm thấy tài khoản." });
+    return res.json({ token: signToken(user), user: publicUser(user), isNewUser: false });
+
+  } catch (e) {
+    console.error("[SYNC-PROFILE ERROR]", e);
+    return res.status(500).json({ error: "Lỗi đồng bộ hồ sơ." });
+  }
+});
+
 // ─── Available providers ─────────────────────────────────────────
 
 router.get("/providers", (req, res) => {

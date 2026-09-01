@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Mail, Phone, ArrowLeft, Loader2, Shield } from "lucide-react";
 import { CornerOrnament, Butterfly, Flower, Vine } from "../assets/Botanical";
 import { api } from "../api";
+import { supabase, isSupabaseConfigured, signInWithOtp, verifyEmailOtp, getCurrentSupabaseSession } from "../lib/supabase";
 
 // ─── OTP Input Component ─────────────────────────────────────────
 function OTPInput({ length = 6, value, onChange, autoFocus = true, onComplete }) {
@@ -198,7 +199,13 @@ export default function AuthPage({ onAuthSuccess }) {
     setEmailError("");
     setEmailSendBusy(true);
     try {
-      await api.sendEmailOTP(email);
+      if (isSupabaseConfigured) {
+        // Supabase Auth — sends real OTP email
+        await signInWithOtp(email);
+      } else {
+        // Legacy backend OTP
+        await api.sendEmailOTP(email);
+      }
       setOtpSent(true);
       setCountdown(60);
       setOtpCode("");
@@ -215,7 +222,19 @@ export default function AuthPage({ onAuthSuccess }) {
     setOtpError("");
     setOtpBusy(true);
     try {
-      const result = await api.verifyEmailOTP(email, code);
+      let result;
+      if (isSupabaseConfigured) {
+        // 1) Verify OTP with Supabase Auth → get session
+        const { session } = await verifyEmailOtp(email, code);
+        if (!session?.access_token) throw new Error("Không nhận được session từ Supabase.");
+
+        // 2) Sync profile with our backend → get backend JWT
+        const syncResult = await api.syncProfile(session.access_token);
+        result = { ...syncResult, supabaseSession: session };
+      } else {
+        // Legacy backend OTP
+        result = await api.verifyEmailOTP(email, code);
+      }
       setSuccessAnim(true);
       setTimeout(() => onAuthSuccess(result), 600);
     } catch (err) {
@@ -228,7 +247,11 @@ export default function AuthPage({ onAuthSuccess }) {
     if (countdown > 0) return;
     setBusy(true);
     try {
-      await api.sendEmailOTP(email);
+      if (isSupabaseConfigured) {
+        await signInWithOtp(email);
+      } else {
+        await api.sendEmailOTP(email);
+      }
       setCountdown(60);
       setOtpCode("");
       setOtpError("");

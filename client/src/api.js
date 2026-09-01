@@ -81,7 +81,23 @@ export function videoSrcFor(track) {
 }
 
 export const api = {
-  // Passwordless auth (primary)
+  // Supabase Auth — Email OTP (new flow)
+  syncProfile: (supabaseToken) => {
+    const API = `${API_BASE_URL}/api/auth/sync-profile`;
+    return fetch(API, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + supabaseToken,
+      },
+    }).then(async (res) => {
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Lỗi " + res.status);
+      return data;
+    });
+  },
+
+  // Legacy backend OTP (kept for SQLite / backward compat)
   sendEmailOTP: (email) => request("/auth/otp/email/send", { method: "POST", body: { email } }),
   verifyEmailOTP: (email, code) => request("/auth/otp/email/verify", { method: "POST", body: { email, code } }),
   sendPhoneOTP: (phone) => request("/auth/otp/phone/send", { method: "POST", body: { phone } }),
