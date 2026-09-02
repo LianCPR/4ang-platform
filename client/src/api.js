@@ -251,6 +251,8 @@ export const api = {
     verifications: (status) => request("/admin/verifications" + (status ? "?status=" + status : "")),
     verifyArtist: (username) => request("/artists/" + encodeURIComponent(username) + "/verify", { method: "POST" }),
     rejectArtistVerification: (username, note) => request("/artists/" + encodeURIComponent(username) + "/reject", { method: "POST", body: { note } }),
+    approveArtistApplication: (id, note) => request("/admin/artist-applications/" + id + "/approve", { method: "POST", body: { note } }),
+    rejectArtistApplication: (id, note) => request("/admin/artist-applications/" + id + "/reject", { method: "POST", body: { note } }),
 
     users: (q) => request("/admin/users" + (q ? "?q=" + encodeURIComponent(q) : "")),
     user: (username) => request("/admin/users/" + encodeURIComponent(username)),
