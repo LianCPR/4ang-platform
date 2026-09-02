@@ -331,7 +331,8 @@ router.post("/artist-applications/:id/approve", (req, res) => {
     db.prepare(`INSERT INTO artist_profiles (username, artist_name, bio, genres, links, verification_status, created_at) VALUES (?, ?, ?, ?, ?, 'independent', ?)`)
       .run(app.username, app.artist_name, app.bio, JSON.stringify(app.main_genre ? [app.main_genre] : []), app.social_links, now);
   }
-  db.prepare("UPDATE users SET is_artist = 1 WHERE id = ?").run(app.user_id);
+  // Use username to update — user_id may be a Supabase UUID (not in SQLite users table)
+  try { db.prepare("UPDATE users SET is_artist = 1 WHERE username = ?").run(app.username); } catch (e) { /* Supabase user not in SQLite, skip */ }
   createNotification(app.username, "ARTIST_APPROVED", "Chào mừng bạn đến với 4ANG Artist", "Yêu cầu trở thành Nghệ sĩ của bạn đã được chấp thuận.", { actorUsername: req.user.username, targetType: "artist_application", targetId: app.id });
   recordAdminAudit(req.user.username, "artist_application_approved", "artist_application", app.id, { artistName: app.artist_name, username: app.username });
   const updated = db.prepare("SELECT * FROM artist_applications WHERE id = ?").get(req.params.id);

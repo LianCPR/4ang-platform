@@ -714,7 +714,7 @@ db.exec(`
 db.exec(`
   CREATE TABLE IF NOT EXISTS artist_applications (
     id TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
     username TEXT NOT NULL,
     artist_name TEXT NOT NULL,
     full_name TEXT NOT NULL DEFAULT '',
@@ -729,15 +729,71 @@ db.exec(`
     submitted_at INTEGER NOT NULL,
     reviewed_at INTEGER,
     reviewed_by TEXT,
-    created_at INTEGER NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id)
+    created_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_artist_apps_user ON artist_applications(user_id, status);
   CREATE INDEX IF NOT EXISTS idx_artist_apps_status ON artist_applications(status, submitted_at);
+`);
 
+// --- Migration: user_id INTEGER → TEXT (supports Supabase UUID IDs) ---
+try {
+  const appInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='artist_applications'").get();
+  if (appInfo && appInfo.sql.includes('user_id INTEGER')) {
+    db.exec('PRAGMA foreign_keys = OFF');
+    db.exec('BEGIN');
+    db.exec(`CREATE TABLE artist_applications_new (
+      id TEXT PRIMARY KEY, user_id TEXT NOT NULL, username TEXT NOT NULL,
+      artist_name TEXT NOT NULL, full_name TEXT NOT NULL DEFAULT '',
+      email TEXT NOT NULL, phone TEXT NOT NULL DEFAULT '', bio TEXT NOT NULL DEFAULT '',
+      main_genre TEXT NOT NULL DEFAULT '', country TEXT NOT NULL DEFAULT '',
+      social_links TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'pending',
+      review_note TEXT, submitted_at INTEGER NOT NULL, reviewed_at INTEGER,
+      reviewed_by TEXT, created_at INTEGER NOT NULL)`);
+    db.exec(`INSERT INTO artist_applications_new
+      SELECT id, CAST(user_id AS TEXT), username, artist_name, full_name,
+        email, phone, bio, main_genre, country, social_links, status,
+        review_note, submitted_at, reviewed_at, reviewed_by, created_at
+      FROM artist_applications`);
+    db.exec('DROP TABLE artist_applications');
+    db.exec('ALTER TABLE artist_applications_new RENAME TO artist_applications');
+    db.exec('CREATE INDEX idx_artist_apps_user ON artist_applications(user_id, status)');
+    db.exec('CREATE INDEX idx_artist_apps_status ON artist_applications(status, submitted_at)');
+    db.exec('COMMIT');
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+} catch (e) { /* migration already done or table doesn't exist */ }
+
+try {
+  const vAppInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='verified_artist_applications'").get();
+  if (vAppInfo && vAppInfo.sql.includes('user_id INTEGER')) {
+    db.exec('PRAGMA foreign_keys = OFF');
+    db.exec('BEGIN');
+    db.exec(`CREATE TABLE verified_artist_applications_new (
+      id TEXT PRIMARY KEY, user_id TEXT NOT NULL, username TEXT NOT NULL,
+      artist_name TEXT NOT NULL, email TEXT NOT NULL, phone TEXT NOT NULL DEFAULT '',
+      bio TEXT NOT NULL DEFAULT '', main_genre TEXT NOT NULL DEFAULT '',
+      social_links TEXT NOT NULL DEFAULT '[]', official_links TEXT NOT NULL DEFAULT '[]',
+      additional_info TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending',
+      review_note TEXT, submitted_at INTEGER NOT NULL, reviewed_at INTEGER,
+      reviewed_by TEXT, created_at INTEGER NOT NULL)`);
+    db.exec(`INSERT INTO verified_artist_applications_new
+      SELECT id, CAST(user_id AS TEXT), username, artist_name, email, phone, bio,
+        main_genre, social_links, official_links, additional_info, status,
+        review_note, submitted_at, reviewed_at, reviewed_by, created_at
+      FROM verified_artist_applications`);
+    db.exec('DROP TABLE verified_artist_applications');
+    db.exec('ALTER TABLE verified_artist_applications_new RENAME TO verified_artist_applications');
+    db.exec('CREATE INDEX idx_verified_apps_user ON verified_artist_applications(user_id, status)');
+    db.exec('CREATE INDEX idx_verified_apps_status ON verified_artist_applications(status, submitted_at)');
+    db.exec('COMMIT');
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+} catch (e) { /* migration already done or table doesn't exist */ }
+
+db.exec(`
   CREATE TABLE IF NOT EXISTS verified_artist_applications (
     id TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
     username TEXT NOT NULL,
     artist_name TEXT NOT NULL,
     email TEXT NOT NULL,
@@ -752,8 +808,7 @@ db.exec(`
     submitted_at INTEGER NOT NULL,
     reviewed_at INTEGER,
     reviewed_by TEXT,
-    created_at INTEGER NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id)
+    created_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_verified_apps_user ON verified_artist_applications(user_id, status);
   CREATE INDEX IF NOT EXISTS idx_verified_apps_status ON verified_artist_applications(status, submitted_at);
