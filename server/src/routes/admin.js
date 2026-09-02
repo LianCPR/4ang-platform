@@ -16,9 +16,66 @@ const adminActionLimit = rateLimit({ windowMs: 60_000, max: 60, keyPrefix: "admi
 /* ============================== DASHBOARD ============================== */
 // Every number here is a real COUNT(*) against real rows — never a
 // placeholder, never rounded up to "look alive" (Part 34/62).
-router.get("/stats", (req, res) => {
+router.get("/stats", async (req, res) => {
   const c = (sql, ...args) => db.prepare(sql).get(...args).c;
   const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+  const USE_SUPABASE = !!process.env.SUPABASE_URL;
+
+  // Query Supabase for user/profile counts (SQLite users table is empty for Supabase Auth users)
+  let userTotal = 0;
+  let userNewToday = 0;
+  let artistTotal = 0;
+  let artistVerified = 0;
+  let artistPending = 0;
+  let restricted = 0;
+
+  if (USE_SUPABASE) {
+    try {
+      const { supabaseAdmin } = await import("../supabase.js");
+      const dayAgoISO = new Date(dayAgo).toISOString();
+
+      // Count profiles (all users)
+      const { count: profileCount } = await supabaseAdmin.from("profiles").select("*", { count: "exact", head: true });
+      userTotal = profileCount || 0;
+
+      // Count new today (profiles created after dayAgo)
+      const { count: newTodayCount } = await supabaseAdmin.from("profiles").select("*", { count: "exact", head: true }).gte("created_at", dayAgo);
+      userNewToday = newTodayCount || 0;
+
+      // Count restricted
+      const { count: restrictedCount } = await supabaseAdmin.from("profiles").select("*", { count: "exact", head: true }).eq("is_restricted", true);
+      restricted = restrictedCount || 0;
+
+      // Artist profiles: combine Supabase + SQLite artist_profiles
+      const { count: supaArtistCount } = await supabaseAdmin.from("artist_profiles").select("*", { count: "exact", head: true });
+      const { count: supaVerifiedCount } = await supabaseAdmin.from("artist_profiles").select("*", { count: "exact", head: true }).eq("verification_status", "verified");
+      const { count: supaPendingCount } = await supabaseAdmin.from("artist_profiles").select("*", { count: "exact", head: true }).eq("verification_status", "pending");
+      // Also count SQLite artist_profiles (legacy data)
+      const sqliteArtists = c("SELECT COUNT(*) AS c FROM artist_profiles");
+      const sqliteVerified = c("SELECT COUNT(*) AS c FROM artist_profiles WHERE verification_status = 'verified'");
+      const sqlitePending = c("SELECT COUNT(*) AS c FROM artist_profiles WHERE verification_status = 'pending'");
+      artistTotal = (supaArtistCount || 0) + sqliteArtists;
+      artistVerified = (supaVerifiedCount || 0) + sqliteVerified;
+      artistPending = (supaPendingCount || 0) + sqlitePending;
+    } catch (e) {
+      console.error("[ADMIN STATS] Supabase query failed:", e.message);
+      // Fallback to SQLite counts
+      userTotal = c("SELECT COUNT(*) AS c FROM users");
+      userNewToday = c("SELECT COUNT(*) AS c FROM users WHERE created_at >= ?", dayAgo);
+      restricted = c("SELECT COUNT(*) AS c FROM users WHERE is_restricted = 1");
+      artistTotal = c("SELECT COUNT(*) AS c FROM artist_profiles");
+      artistVerified = c("SELECT COUNT(*) AS c FROM artist_profiles WHERE verification_status = 'verified'");
+      artistPending = c("SELECT COUNT(*) AS c FROM artist_profiles WHERE verification_status = 'pending'");
+    }
+  } else {
+    userTotal = c("SELECT COUNT(*) AS c FROM users");
+    userNewToday = c("SELECT COUNT(*) AS c FROM users WHERE created_at >= ?", dayAgo);
+    restricted = c("SELECT COUNT(*) AS c FROM users WHERE is_restricted = 1");
+    artistTotal = c("SELECT COUNT(*) AS c FROM artist_profiles");
+    artistVerified = c("SELECT COUNT(*) AS c FROM artist_profiles WHERE verification_status = 'verified'");
+    artistPending = c("SELECT COUNT(*) AS c FROM artist_profiles WHERE verification_status = 'pending'");
+  }
+
   const stats = {
     submissions: {
       pendingReview: c("SELECT COUNT(*) AS c FROM submissions WHERE status = 'pending_review'"),
@@ -31,14 +88,14 @@ router.get("/stats", (req, res) => {
       rejectedTotal: c("SELECT COUNT(*) AS c FROM submissions WHERE status = 'rejected'"),
     },
     users: {
-      total: c("SELECT COUNT(*) AS c FROM users"),
-      newToday: c("SELECT COUNT(*) AS c FROM users WHERE created_at >= ?", dayAgo),
-      restricted: c("SELECT COUNT(*) AS c FROM users WHERE is_restricted = 1"),
+      total: userTotal,
+      newToday: userNewToday,
+      restricted: restricted,
     },
     artists: {
-      total: c("SELECT COUNT(*) AS c FROM artist_profiles"),
-      verified: c("SELECT COUNT(*) AS c FROM artist_profiles WHERE verification_status = 'verified'"),
-      verificationPending: c("SELECT COUNT(*) AS c FROM artist_profiles WHERE verification_status = 'pending'"),
+      total: artistTotal,
+      verified: artistVerified,
+      verificationPending: artistPending,
     },
     music: {
       published: c("SELECT COUNT(*) AS c FROM tracks WHERE status = 'approved'"),
