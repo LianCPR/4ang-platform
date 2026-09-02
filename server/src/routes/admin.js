@@ -378,35 +378,48 @@ router.get("/artist-applications", (req, res) => {
 });
 
 router.post("/artist-applications/:id/approve", (req, res) => {
-  const app = db.prepare("SELECT * FROM artist_applications WHERE id = ?").get(req.params.id);
-  if (!app) return res.status(404).json({ error: "Không tìm thấy yêu cầu." });
-  if (app.status !== "pending") return res.status(409).json({ error: "Yêu cầu đã được xử lý." });
-  const now = Date.now();
-  db.prepare("UPDATE artist_applications SET status = 'approved', reviewed_at = ?, reviewed_by = ? WHERE id = ?").run(now, req.user.username, req.params.id);
-  const existingArtist = db.prepare("SELECT username FROM artist_profiles WHERE username = ?").get(app.username);
-  if (!existingArtist) {
-    db.prepare(`INSERT INTO artist_profiles (username, artist_name, bio, genres, links, verification_status, created_at) VALUES (?, ?, ?, ?, ?, 'independent', ?)`)
-      .run(app.username, app.artist_name, app.bio, JSON.stringify(app.main_genre ? [app.main_genre] : []), app.social_links, now);
+  try {
+    const app = db.prepare("SELECT * FROM artist_applications WHERE id = ?").get(req.params.id);
+    if (!app) return res.status(404).json({ error: "Không tìm thấy yêu cầu." });
+    if (app.status !== "pending") return res.status(409).json({ error: "Yêu cầu đã được xử lý." });
+    const now = Date.now();
+    db.prepare("UPDATE artist_applications SET status = 'approved', reviewed_at = ?, reviewed_by = ? WHERE id = ?").run(now, req.user.username, req.params.id);
+    // Create artist profile (may fail if table doesn't exist yet — that's OK)
+    try {
+      const existingArtist = db.prepare("SELECT username FROM artist_profiles WHERE username = ?").get(app.username);
+      if (!existingArtist) {
+        db.prepare(`INSERT INTO artist_profiles (username, artist_name, bio, genres, links, verification_status, created_at) VALUES (?, ?, ?, ?, ?, 'independent', ?)`)
+          .run(app.username, app.artist_name, app.bio, JSON.stringify(app.main_genre ? [app.main_genre] : []), app.social_links, now);
+      }
+    } catch (e) { console.error("[APPROVE] artist_profiles insert failed:", e.message); }
+    // Use username to update — user_id may be a Supabase UUID (not in SQLite users table)
+    try { db.prepare("UPDATE users SET is_artist = 1 WHERE username = ?").run(app.username); } catch (e) { /* Supabase user not in SQLite, skip */ }
+    try { createNotification(app.username, "ARTIST_APPROVED", "Chào mừng bạn đến với 4ANG Artist", "Yêu cầu trở thành Nghệ sĩ của bạn đã được chấp thuận.", { actorUsername: req.user.username, targetType: "artist_application", targetId: app.id }); } catch (e) { /* table may not exist */ }
+    try { recordAdminAudit(req.user.username, "artist_application_approved", "artist_application", app.id, { artistName: app.artist_name, username: app.username }); } catch (e) { /* table may not exist */ }
+    const updated = db.prepare("SELECT * FROM artist_applications WHERE id = ?").get(req.params.id);
+    res.json({ application: shapeArtistApplication(updated) });
+  } catch (e) {
+    console.error("[APPROVE ERROR]", e);
+    res.status(500).json({ error: "Lỗi server khi duyệt hồ sơ." });
   }
-  // Use username to update — user_id may be a Supabase UUID (not in SQLite users table)
-  try { db.prepare("UPDATE users SET is_artist = 1 WHERE username = ?").run(app.username); } catch (e) { /* Supabase user not in SQLite, skip */ }
-  createNotification(app.username, "ARTIST_APPROVED", "Chào mừng bạn đến với 4ANG Artist", "Yêu cầu trở thành Nghệ sĩ của bạn đã được chấp thuận.", { actorUsername: req.user.username, targetType: "artist_application", targetId: app.id });
-  recordAdminAudit(req.user.username, "artist_application_approved", "artist_application", app.id, { artistName: app.artist_name, username: app.username });
-  const updated = db.prepare("SELECT * FROM artist_applications WHERE id = ?").get(req.params.id);
-  res.json({ application: shapeArtistApplication(updated) });
 });
 
 router.post("/artist-applications/:id/reject", (req, res) => {
-  const app = db.prepare("SELECT * FROM artist_applications WHERE id = ?").get(req.params.id);
-  if (!app) return res.status(404).json({ error: "Không tìm thấy yêu cầu." });
-  if (app.status !== "pending") return res.status(409).json({ error: "Yêu cầu đã được xử lý." });
-  const note = ((req.body && req.body.note) || "").trim().slice(0, 500);
-  const now = Date.now();
-  db.prepare("UPDATE artist_applications SET status = 'rejected', review_note = ?, reviewed_at = ?, reviewed_by = ? WHERE id = ?").run(note || null, now, req.user.username, req.params.id);
-  createNotification(app.username, "ARTIST_REJECTED", "Yêu cầu chưa được chấp thuận", "Vui lòng xem chi tiết trong hồ sơ.", { actorUsername: req.user.username, targetType: "artist_application", targetId: app.id });
-  recordAdminAudit(req.user.username, "artist_application_rejected", "artist_application", app.id, { note: note || null });
-  const updated = db.prepare("SELECT * FROM artist_applications WHERE id = ?").get(req.params.id);
-  res.json({ application: shapeArtistApplication(updated) });
+  try {
+    const app = db.prepare("SELECT * FROM artist_applications WHERE id = ?").get(req.params.id);
+    if (!app) return res.status(404).json({ error: "Không tìm thấy yêu cầu." });
+    if (app.status !== "pending") return res.status(409).json({ error: "Yêu cầu đã được xử lý." });
+    const note = ((req.body && req.body.note) || "").trim().slice(0, 500);
+    const now = Date.now();
+    db.prepare("UPDATE artist_applications SET status = 'rejected', review_note = ?, reviewed_at = ?, reviewed_by = ? WHERE id = ?").run(note || null, now, req.user.username, req.params.id);
+    try { createNotification(app.username, "ARTIST_REJECTED", "Yêu cầu chưa được chấp thuận", "Vui lòng xem chi tiết trong hồ sơ.", { actorUsername: req.user.username, targetType: "artist_application", targetId: app.id }); } catch (e) { /* table may not exist */ }
+    try { recordAdminAudit(req.user.username, "artist_application_rejected", "artist_application", app.id, { note: note || null }); } catch (e) { /* table may not exist */ }
+    const updated = db.prepare("SELECT * FROM artist_applications WHERE id = ?").get(req.params.id);
+    res.json({ application: shapeArtistApplication(updated) });
+  } catch (e) {
+    console.error("[REJECT ERROR]", e);
+    res.status(500).json({ error: "Lỗi server khi từ chối hồ sơ." });
+  }
 });
 
 export default router;
