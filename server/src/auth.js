@@ -35,11 +35,17 @@ export async function requireAuth(req, res, next) {
           if (profile.is_restricted) {
             return res.status(403).json({ error: "Tài khoản của bạn đã bị hạn chế." });
           }
+          // Check ADMIN_EMAILS for admin role (covers profiles created before ADMIN_EMAILS was configured)
+          const adminEmails = (process.env.ADMIN_EMAILS || "")
+            .split(",")
+            .map((e) => e.trim().toLowerCase())
+            .filter(Boolean);
+          const emailIsAdmin = supabaseUser.email && adminEmails.includes(supabaseUser.email.toLowerCase());
           req.user = {
             id: supabaseUser.id,
             username: profile.username,
             email: supabaseUser.email,
-            isAdmin: profile.role === "admin",
+            isAdmin: profile.role === "admin" || emailIsAdmin,
             isArtist: profile.role === "artist",
             profile,
           };
@@ -52,23 +58,47 @@ export async function requireAuth(req, res, next) {
     }
   }
 
-  // 2) Fallback to legacy JWT
+  // 2) Fallback to legacy JWT (also handles backend JWTs issued by sync-profile for Supabase users)
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    // Enrich with email from database so ADMIN_EMAILS check works
     let email = decoded.email || null;
-    if (!email && decoded.username) {
+    let isAdmin = !!decoded.is_admin || !!decoded.isAdmin;
+    let isArtist = !!decoded.is_artist || !!decoded.isArtist;
+    let profile = null;
+
+    // Try SQLite first
+    if (decoded.username) {
       try {
         const { db } = await import("./db.js");
-        const u = db.prepare("SELECT email FROM users WHERE username = ?").get(decoded.username);
-        if (u) email = u.email;
+        const u = db.prepare("SELECT email, is_admin FROM users WHERE username = ?").get(decoded.username);
+        if (u) { email = u.email || email; isAdmin = !!u.is_admin || isAdmin; }
       } catch { /* ignore */ }
     }
+
+    // If user not found in SQLite but Supabase is configured, try Supabase profile
+    // This covers backend JWTs issued by sync-profile for Supabase-only users
+    if (USE_SUPABASE && decoded.id && !email) {
+      try {
+        profile = await getProfile(decoded.id);
+        if (profile) {
+          email = profile.email || null;
+          // Check ADMIN_EMAILS for these users too
+          const adminEmails = (process.env.ADMIN_EMAILS || "")
+            .split(",")
+            .map((e) => e.trim().toLowerCase())
+            .filter(Boolean);
+          const emailIsAdmin = email && adminEmails.includes(email.toLowerCase());
+          isAdmin = profile.role === "admin" || emailIsAdmin;
+          isArtist = profile.role === "artist";
+        }
+      } catch { /* ignore */ }
+    }
+
     req.user = {
       ...decoded,
       email,
-      isAdmin: !!decoded.is_admin || !!decoded.isAdmin,
-      isArtist: !!decoded.is_artist || !!decoded.isArtist,
+      isAdmin,
+      isArtist,
     };
     return next();
   } catch (e) {
@@ -87,11 +117,17 @@ export async function optionalAuth(req, res, next) {
       if (supabaseUser) {
         const profile = await getProfile(supabaseUser.id);
         if (profile) {
+          // Check ADMIN_EMAILS for admin role (covers profiles created before ADMIN_EMAILS was configured)
+          const adminEmails = (process.env.ADMIN_EMAILS || "")
+            .split(",")
+            .map((e) => e.trim().toLowerCase())
+            .filter(Boolean);
+          const emailIsAdmin = supabaseUser.email && adminEmails.includes(supabaseUser.email.toLowerCase());
           req.user = {
             id: supabaseUser.id,
             username: profile.username,
             email: supabaseUser.email,
-            isAdmin: profile.role === "admin",
+            isAdmin: profile.role === "admin" || emailIsAdmin,
             isArtist: profile.role === "artist",
             profile,
           };
@@ -103,22 +139,42 @@ export async function optionalAuth(req, res, next) {
     }
   }
 
-  // 2) Fallback to legacy JWT
+  // 2) Fallback to legacy JWT (also handles backend JWTs issued by sync-profile for Supabase users)
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     let email = decoded.email || null;
-    if (!email && decoded.username) {
+    let isAdmin = !!decoded.is_admin || !!decoded.isAdmin;
+    let isArtist = !!decoded.is_artist || !!decoded.isArtist;
+
+    if (decoded.username) {
       try {
         const { db } = await import("./db.js");
-        const u = db.prepare("SELECT email FROM users WHERE username = ?").get(decoded.username);
-        if (u) email = u.email;
+        const u = db.prepare("SELECT email, is_admin FROM users WHERE username = ?").get(decoded.username);
+        if (u) { email = u.email || email; isAdmin = !!u.is_admin || isAdmin; }
       } catch { /* ignore */ }
     }
+
+    if (USE_SUPABASE && decoded.id && !email) {
+      try {
+        const profile = await getProfile(decoded.id);
+        if (profile) {
+          email = profile.email || null;
+          const adminEmails = (process.env.ADMIN_EMAILS || "")
+            .split(",")
+            .map((e) => e.trim().toLowerCase())
+            .filter(Boolean);
+          const emailIsAdmin = email && adminEmails.includes(email.toLowerCase());
+          isAdmin = profile.role === "admin" || emailIsAdmin;
+          isArtist = profile.role === "artist";
+        }
+      } catch { /* ignore */ }
+    }
+
     req.user = {
       ...decoded,
       email,
-      isAdmin: !!decoded.is_admin || !!decoded.isAdmin,
-      isArtist: !!decoded.is_artist || !!decoded.isArtist,
+      isAdmin,
+      isArtist,
     };
   } catch (e) {
     // invalid token — continue without auth

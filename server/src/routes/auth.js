@@ -629,8 +629,43 @@ router.post("/login", loginLimit, async (req, res) => {
 });
 
 // ─── Current user ────────────────────────────────────────────────
+// Called on page refresh to validate the stored backend JWT.
+// For Supabase users, checks ADMIN_EMAILS to upgrade role if needed.
 
-router.get("/me", requireAuth, (req, res) => {
+router.get("/me", requireAuth, async (req, res) => {
+  // === SUPABASE PATH ===
+  if (USE_SUPABASE && req.user.id) {
+    try {
+      const { data: profile } = await supabaseAdmin
+        .from("profiles").select("*").eq("id", req.user.id).single();
+      if (profile) {
+        let role = profile.role;
+        const email = req.user.email || profile.email;
+        if (isAdminEmail(email) && role !== "admin") {
+          await supabaseAdmin
+            .from("profiles").update({ role: "admin", updated_at: Date.now() })
+            .eq("id", req.user.id);
+          role = "admin";
+        }
+        return res.json({
+          user: {
+            username: profile.username,
+            displayName: profile.display_name,
+            isAdmin: role === "admin",
+            isArtist: role === "artist",
+            onboardingCompleted: !!profile.onboarding_completed,
+            email: profile.email || email,
+            emailVerified: !!profile.email_verified,
+            authProvider: "email",
+          },
+        });
+      }
+    } catch (e) {
+      console.error("[ME] Supabase profile lookup failed:", e.message);
+    }
+  }
+
+  // === LEGACY SQLITE PATH ===
   const user = db.prepare("SELECT * FROM users WHERE username = ?").get(req.user.username);
   if (!user) return res.status(404).json({ error: "Không tìm thấy tài khoản." });
   res.json({ user: publicUser(user) });
@@ -665,8 +700,8 @@ router.post("/sync-profile", requireAuth, async (req, res) => {
             email: email,
             role: adminRole,
             email_verified: true,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
+            created_at: Date.now(),
+            updated_at: Date.now(),
           }).select("*").single();
         if (insertErr) {
           console.error("[SYNC-PROFILE] insert error:", insertErr.message);
@@ -677,7 +712,7 @@ router.post("/sync-profile", requireAuth, async (req, res) => {
         // Mark email as verified if not already
         if (!profile.email_verified && email) {
           await supabaseAdmin
-            .from("profiles").update({ email_verified: true, updated_at: new Date().toISOString() })
+            .from("profiles").update({ email_verified: true, updated_at: Date.now() })
             .eq("id", userId);
           profile.email_verified = true;
         }
@@ -687,7 +722,7 @@ router.post("/sync-profile", requireAuth, async (req, res) => {
       let effectiveRole = profile.role;
       if (isAdminEmail(email) && profile.role !== "admin") {
         await supabaseAdmin
-          .from("profiles").update({ role: "admin", updated_at: new Date().toISOString() })
+          .from("profiles").update({ role: "admin", updated_at: Date.now() })
           .eq("id", userId);
         effectiveRole = "admin";
       }
