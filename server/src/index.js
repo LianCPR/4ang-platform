@@ -47,6 +47,15 @@ app.use(express.json({ limit: "1mb" }));
 app.get("/api/health", (req, res) => {
   res.json({ ok: true, service: "song-backend", time: new Date().toISOString() });
 });
+app.get("/api/version", (req, res) => {
+  res.json({
+    version: "2024-09-02-v2",
+    commit: process.env.RENDER_GIT_COMMIT || "unknown",
+    nodeEnv: process.env.NODE_ENV || "development",
+    supabase: !!process.env.SUPABASE_URL,
+    timestamp: Date.now(),
+  });
+});
 
 app.use("/api/auth", authRoutes);
 app.use("/api/tracks", trackRoutes);

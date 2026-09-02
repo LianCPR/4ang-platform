@@ -184,51 +184,62 @@ router.get("/analytics", (req, res) => {
 // `_type` tag ("profile" or "application") so the frontend can dispatch
 // approve/reject to the correct endpoint.
 router.get("/verifications", (req, res) => {
-  const status = (req.query.status || "pending").trim();
+  try {
+    const status = (req.query.status || "pending").trim();
 
-  // --- Artist profile badge verifications ---
-  const profileRows = status === "all"
-    ? db.prepare("SELECT * FROM artist_profiles ORDER BY verification_requested_at DESC, created_at DESC").all()
-    : db.prepare("SELECT * FROM artist_profiles WHERE verification_status = ? ORDER BY verification_requested_at ASC, created_at ASC").all(status);
-  const profiles = profileRows.map((r) => ({ ...shapeArtistProfile(r), _type: "profile" }));
+    // --- Artist profile badge verifications ---
+    let profiles = [];
+    try {
+      const profileRows = status === "all"
+        ? db.prepare("SELECT * FROM artist_profiles ORDER BY verification_requested_at DESC, created_at DESC").all()
+        : db.prepare("SELECT * FROM artist_profiles WHERE verification_status = ? ORDER BY verification_requested_at ASC, created_at ASC").all(status);
+      profiles = profileRows.map((r) => ({ ...shapeArtistProfile(r), _type: "profile" }));
+    } catch (e) {
+      console.error("[VERIFICATIONS] artist_profiles query failed:", e.message);
+    }
 
-  // --- Artist application registrations ("Trở thành nghệ sĩ") ---
-  const appStatusMap = { pending: "pending", reviewing: "pending", verified: "approved", rejected: "rejected" };
-  let applicationRows = [];
-  if (status === "all") {
-    applicationRows = db.prepare("SELECT * FROM artist_applications ORDER BY submitted_at DESC").all();
-  } else if (status === "pending" || status === "reviewing") {
-    // Show both pending AND under-review applications when admin selects "Đang chờ"
-    applicationRows = db.prepare("SELECT * FROM artist_applications WHERE status IN ('pending', 'reviewing') ORDER BY submitted_at ASC").all();
-  } else {
-    const mapped = appStatusMap[status] || status;
-    applicationRows = db.prepare("SELECT * FROM artist_applications WHERE status = ? ORDER BY submitted_at ASC").all(mapped);
+    // --- Artist application registrations ("Trở thành nghệ sĩ") ---
+    let applications = [];
+    try {
+      const appStatusMap = { pending: "pending", reviewing: "pending", verified: "approved", rejected: "rejected" };
+      let applicationRows = [];
+      if (status === "all") {
+        applicationRows = db.prepare("SELECT * FROM artist_applications ORDER BY submitted_at DESC").all();
+      } else if (status === "pending" || status === "reviewing") {
+        applicationRows = db.prepare("SELECT * FROM artist_applications WHERE status IN ('pending', 'reviewing') ORDER BY submitted_at ASC").all();
+      } else {
+        const mapped = appStatusMap[status] || status;
+        applicationRows = db.prepare("SELECT * FROM artist_applications WHERE status = ? ORDER BY submitted_at ASC").all(mapped);
+      }
+      applications = applicationRows.map((r) => ({
+        ...shapeArtistApplication(r),
+        _type: "application",
+        username: r.username,
+        artistName: r.artist_name,
+        verificationStatus: r.status === "approved" ? "verified" : r.status === "rejected" ? "rejected" : "pending",
+        verificationNote: r.review_note || null,
+        avatarUrl: null,
+      }));
+    } catch (e) {
+      console.error("[VERIFICATIONS] artist_applications query failed:", e.message);
+    }
+
+    // Merge and sort: pending first (oldest first), then others (newest first)
+    const merged = [...profiles, ...applications];
+    merged.sort((a, b) => {
+      const aPending = a.verificationStatus === "pending" ? 0 : 1;
+      const bPending = b.verificationStatus === "pending" ? 0 : 1;
+      if (aPending !== bPending) return aPending - bPending;
+      const aTime = a._type === "application" ? (a.submittedAt || 0) : (a.createdAt || 0);
+      const bTime = b._type === "application" ? (b.submittedAt || 0) : (b.createdAt || 0);
+      return aTime - bTime;
+    });
+    console.log(`[VERIFICATIONS] status=${status} profiles=${profiles.length} apps=${applications.length} merged=${merged.length}`);
+    res.json({ artists: merged });
+  } catch (e) {
+    console.error("[VERIFICATIONS] unexpected error:", e);
+    res.json({ artists: [] });
   }
-  const applications = applicationRows.map((r) => ({
-    ...shapeArtistApplication(r),
-    _type: "application",
-    // Map to the same shape the frontend expects for display
-    username: r.username,
-    artistName: r.artist_name,
-    verificationStatus: r.status === "approved" ? "verified" : r.status === "rejected" ? "rejected" : "pending",
-    verificationNote: r.review_note || null,
-    avatarUrl: null,
-  }));
-
-  // Merge and sort: pending first (oldest first), then others (newest first)
-  const merged = [...profiles, ...applications];
-  merged.sort((a, b) => {
-    // Pending items first
-    const aPending = a.verificationStatus === "pending" ? 0 : 1;
-    const bPending = b.verificationStatus === "pending" ? 0 : 1;
-    if (aPending !== bPending) return aPending - bPending;
-    // Then by creation time ascending for pending, descending for rest
-    const aTime = a._type === "application" ? (a.submittedAt || 0) : (a.createdAt || 0);
-    const bTime = b._type === "application" ? (b.submittedAt || 0) : (b.createdAt || 0);
-    return aTime - bTime;
-  });
-  console.log(`[VERIFICATIONS] profiles=${profiles.length} apps=${applications.length} merged=${merged.length}`);
-  res.json({ artists: merged });
 });
 
 /* ================================ USERS ================================ */
