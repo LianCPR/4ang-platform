@@ -227,6 +227,7 @@ router.get("/verifications", (req, res) => {
     const bTime = b._type === "application" ? (b.submittedAt || 0) : (b.createdAt || 0);
     return aTime - bTime;
   });
+  console.log(`[VERIFICATIONS] profiles=${profiles.length} apps=${applications.length} merged=${merged.length}`);
   res.json({ artists: merged });
 });
 
