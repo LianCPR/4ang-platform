@@ -55,8 +55,18 @@ export async function requireAuth(req, res, next) {
   // 2) Fallback to legacy JWT
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
+    // Enrich with email from database so ADMIN_EMAILS check works
+    let email = decoded.email || null;
+    if (!email && decoded.username) {
+      try {
+        const { db } = await import("./db.js");
+        const u = db.prepare("SELECT email FROM users WHERE username = ?").get(decoded.username);
+        if (u) email = u.email;
+      } catch { /* ignore */ }
+    }
     req.user = {
       ...decoded,
+      email,
       isAdmin: !!decoded.is_admin || !!decoded.isAdmin,
       isArtist: !!decoded.is_artist || !!decoded.isArtist,
     };
@@ -96,8 +106,17 @@ export async function optionalAuth(req, res, next) {
   // 2) Fallback to legacy JWT
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
+    let email = decoded.email || null;
+    if (!email && decoded.username) {
+      try {
+        const { db } = await import("./db.js");
+        const u = db.prepare("SELECT email FROM users WHERE username = ?").get(decoded.username);
+        if (u) email = u.email;
+      } catch { /* ignore */ }
+    }
     req.user = {
       ...decoded,
+      email,
       isAdmin: !!decoded.is_admin || !!decoded.isAdmin,
       isArtist: !!decoded.is_artist || !!decoded.isArtist,
     };
@@ -108,7 +127,16 @@ export async function optionalAuth(req, res, next) {
 }
 
 export function requireAdmin(req, res, next) {
-  if (!req.user || !req.user.isAdmin) return res.status(403).json({ error: "Chỉ admin mới thực hiện được việc này." });
+  if (!req.user) return res.status(401).json({ error: "Chưa đăng nhập." });
+  // Check both the profile role AND the ADMIN_EMAILS env var (safety fallback)
+  const adminEmails = (process.env.ADMIN_EMAILS || "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+  const emailIsAdmin = req.user.email && adminEmails.includes(req.user.email.toLowerCase());
+  if (!req.user.isAdmin && !emailIsAdmin) {
+    return res.status(403).json({ error: "Chỉ admin mới thực hiện được việc này." });
+  }
   next();
 }
 

@@ -7,6 +7,15 @@ import { rateLimit } from "../rateLimit.js";
 import { supabaseAdmin } from "../supabase.js";
 
 const USE_SUPABASE = !!process.env.SUPABASE_URL;
+const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || "")
+  .split(",")
+  .map((e) => e.trim().toLowerCase())
+  .filter(Boolean);
+
+function isAdminEmail(email) {
+  if (!email) return false;
+  return ADMIN_EMAILS.includes(email.toLowerCase());
+}
 
 const router = express.Router();
 
@@ -203,13 +212,12 @@ router.post("/otp/email/verify", otpVerifyLimit, async (req, res) => {
 
       if (!existingProfile) {
         const uname = usernameFromSeed(normalizedEmail.split("@")[0]);
-        const { count } = await supabaseAdmin.from("profiles").select("*", { count: "exact", head: true });
         await supabaseAdmin.from("profiles").insert({
           id: supaUser.id,
           username: uname,
           display_name: normalizedEmail.split("@")[0],
           email: normalizedEmail,
-          role: (count || 0) === 0 ? "admin" : "user",
+          role: isAdminEmail(normalizedEmail) ? "admin" : "user",
           email_verified: true,
           created_at: Date.now(),
           updated_at: Date.now(),
@@ -327,14 +335,13 @@ router.post("/otp/phone/verify", otpVerifyLimit, async (req, res) => {
         .from("profiles").select("*").eq("id", supaUser.id).single();
 
       if (!existingProfile) {
-        const { count } = await supabaseAdmin.from("profiles").select("*", { count: "exact", head: true });
         await supabaseAdmin.from("profiles").insert({
           id: supaUser.id,
           username: uname,
           display_name: uname,
           phone: phoneE164,
           phone_verified: true,
-          role: (count || 0) === 0 ? "admin" : "user",
+          role: "user",
           created_at: Date.now(),
           updated_at: Date.now(),
         });
@@ -451,14 +458,13 @@ router.post("/google", loginLimit, async (req, res) => {
         .from("profiles").select("*").eq("id", supaUser.id).single();
 
       if (!existingProfile) {
-        const { count } = await supabaseAdmin.from("profiles").select("*", { count: "exact", head: true });
         await supabaseAdmin.from("profiles").insert({
           id: supaUser.id,
           username: uname,
           display_name: googleProfile.name || uname,
           email: googleProfile.email,
           avatar_url: null,
-          role: (count || 0) === 0 ? "admin" : "user",
+          role: isAdminEmail(googleProfile.email) ? "admin" : "user",
           email_verified: true,
           created_at: Date.now(),
           updated_at: Date.now(),
@@ -553,13 +559,12 @@ router.post("/apple", loginLimit, async (req, res) => {
         .from("profiles").select("*").eq("id", supaUser.id).single();
 
       if (!existingProfile) {
-        const { count } = await supabaseAdmin.from("profiles").select("*", { count: "exact", head: true });
         await supabaseAdmin.from("profiles").insert({
           id: supaUser.id,
           username: uname,
           display_name: profile.name || uname,
           email: profile.email,
-          role: (count || 0) === 0 ? "admin" : "user",
+          role: isAdminEmail(profile.email) ? "admin" : "user",
           email_verified: !!profile.email,
           created_at: Date.now(),
           updated_at: Date.now(),
@@ -649,17 +654,16 @@ router.post("/sync-profile", requireAuth, async (req, res) => {
       let profile = existing;
 
       if (!profile) {
-        // Create new profile — first user becomes admin
+        // Create new profile — check ADMIN_EMAILS env var for admin role
         const uname = usernameFromSeed((email || "user").split("@")[0]);
-        const { count } = await supabaseAdmin
-          .from("profiles").select("*", { count: "exact", head: true });
+        const adminRole = isAdminEmail(email) ? "admin" : "user";
         const { data: newProfile, error: insertErr } = await supabaseAdmin
           .from("profiles").insert({
             id: userId,
             username: uname,
             display_name: email?.split("@")[0] || uname,
             email: email,
-            role: (count || 0) === 0 ? "admin" : "user",
+            role: adminRole,
             email_verified: true,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
@@ -679,6 +683,15 @@ router.post("/sync-profile", requireAuth, async (req, res) => {
         }
       }
 
+      // Ensure admin role is correct — ADMIN_EMAILS overrides database
+      let effectiveRole = profile.role;
+      if (isAdminEmail(email) && profile.role !== "admin") {
+        await supabaseAdmin
+          .from("profiles").update({ role: "admin", updated_at: new Date().toISOString() })
+          .eq("id", userId);
+        effectiveRole = "admin";
+      }
+
       // Generate backend JWT (our API calls use this)
       const token = signToken({ id: userId, username: profile.username });
 
@@ -687,8 +700,8 @@ router.post("/sync-profile", requireAuth, async (req, res) => {
         user: {
           username: profile.username,
           displayName: profile.display_name,
-          isAdmin: profile.role === "admin",
-          isArtist: profile.role === "artist",
+          isAdmin: effectiveRole === "admin",
+          isArtist: effectiveRole === "artist",
           onboardingCompleted: !!profile.onboarding_completed,
           email: profile.email || email,
           emailVerified: !!profile.email_verified,

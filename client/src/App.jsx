@@ -3,6 +3,7 @@ import { useSearchParams, useLocation } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { api, audioSrcFor, getToken, setToken } from "./api";
 import { lsGet, lsSet } from "./storage";
+import { supabase, isSupabaseConfigured, getSupabaseToken } from "./lib/supabase";
 import { hashHue } from "./lib/format";
 import { panelVariants } from "./lib/motion";
 import { resolveAmbient, applyAmbient } from "./lib/ambient";
@@ -115,19 +116,41 @@ export default function App() {
   const allKnownTracks = [...tracks, ...myTracksState];
   const currentLocalTrack = current && current.source === "local" ? allKnownTracks.find((t) => t.id === current.trackId) : null;
 
-  /* ---- initial load ---- */
+  /* ---- initial load: Supabase session first, then legacy JWT ---- */
   useEffect(() => {
     (async () => {
-      const token = getToken();
-      if (token) {
-        try {
-          const { user } = await api.me();
-          setSession(user);
+      let restored = false;
 
+      // 1) Try Supabase session restoration (persistSession: true stores in localStorage)
+      if (isSupabaseConfigured) {
+        try {
+          const { data: { session: supaSession } } = await supabase.auth.getSession();
+          if (supaSession?.access_token) {
+            // Sync profile with backend to get backend JWT
+            const syncResult = await api.syncProfile(supaSession.access_token);
+            setToken(syncResult.token);
+            setSession(syncResult.user);
+            restored = true;
+          }
         } catch (e) {
-          setToken(null);
+          // Supabase session expired or invalid — try legacy token
         }
       }
+
+      // 2) Fallback: legacy backend JWT
+      if (!restored) {
+        const token = getToken();
+        if (token) {
+          try {
+            const { user } = await api.me();
+            setSession(user);
+            restored = true;
+          } catch (e) {
+            setToken(null);
+          }
+        }
+      }
+
       setAuthReady(true);
       try {
         const { tracks: list } = await api.publicTracks();
@@ -232,12 +255,15 @@ export default function App() {
     refreshTracks();
   }
 
-
   function handleLogout() {
     setToken(null);
     setSession(null);
     setMyTracksState([]);
     setActiveTab("home");
+    // Sign out from Supabase so the session is cleared across refreshes
+    if (isSupabaseConfigured) {
+      supabase.auth.signOut().catch(() => {});
+    }
   }
 
   /* ---- submit music (Phase 6) ---- */

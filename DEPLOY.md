@@ -2,7 +2,20 @@
 
 ## Architecture Options
 
-### Option A: Vercel (Frontend) + Render (Backend) ⭐ Recommended
+### Option A: Cloudflare Pages (Frontend) + Render (Backend) ⭐ Current
+
+```
+┌─────────────────────────┐          ┌──────────────────────┐
+│  Cloudflare Pages       │          │     Render            │
+│  ┌───────────────────┐  │  /api/*  │  ┌────────────────┐  │
+│  │  React + Vite      │──┼──proxy──▶│  Express + Node  │  │
+│  │  Static SPA        │  │ (worker) │  SQLite on disk   │  │
+│  │  + Functions proxy  │  │          │  File uploads     │  │
+│  └───────────────────┘  │          └──────────────────────┘
+└─────────────────────────┘
+```
+
+### Option B: Vercel (Frontend) + Render (Backend)
 
 ```
 ┌─────────────────────┐          ┌──────────────────────┐
@@ -14,7 +27,7 @@
 └─────────────────────┘          └──────────────────────┘
 ```
 
-### Option B: All-in-One on Render
+### Option C: All-in-One on Render
 
 ```
 ┌──────────────────────────────────┐
@@ -30,7 +43,88 @@
 
 ---
 
-## Option A: Vercel + Render (Recommended)
+## Option A: Cloudflare Pages + Render (Current Production)
+
+### Prerequisites
+- [ ] GitHub account with repo pushed
+- [ ] [Cloudflare account](https://dash.cloudflare.com) (free tier)
+- [ ] [Render account](https://render.com) (free tier)
+- [ ] Node.js 22+ locally
+
+### Step 1: Deploy Backend to Render
+
+1. **Go to [render.com](https://render.com) → New → Web Service**
+2. **Connect your GitHub repo**
+3. **Configure:**
+   - **Name:** `4ang-backend`
+   - **Region:** Singapore (or nearest)
+   - **Branch:** `main`
+   - **Root Directory:** `server`
+   - **Runtime:** Node
+   - **Build Command:** `npm ci`
+   - **Start Command:** `node src/index.js`
+4. **Add Environment Variables:**
+
+| Key | Value |
+|-----|-------|
+| `NODE_ENV` | `production` |
+| `JWT_SECRET` | *(click Generate)* |
+| `SUPABASE_URL` | `https://zgsrbyuthuupnhgwfhvd.supabase.co` |
+| `SUPABASE_ANON_KEY` | *(from Supabase Dashboard)* |
+| `SUPABASE_SERVICE_ROLE_KEY` | *(from Supabase Dashboard — NEVER expose to client)* |
+| `DB_PATH` | `/var/data/4ang.sqlite` |
+| `UPLOAD_DIR` | `/var/data/uploads` |
+| `CORS_ORIGINS` | `https://4ang.heiennek286.workers.dev` |
+| `APP_URL` | `https://4ang.heiennek286.workers.dev` |
+
+5. **Add Persistent Disk:**
+   - **Name:** `4ang-data`
+   - **Mount Path:** `/var/data`
+   - **Size:** 1 GB
+
+6. **Click Create Web Service** → Wait for deploy
+
+7. **Verify:** Visit `https://YOUR-PROJECT.onrender.com/api/health`
+
+### Step 2: Deploy Frontend to Cloudflare Pages
+
+1. **Go to [Cloudflare Dashboard](https://dash.cloudflare.com) → Workers & Pages → Create**
+2. **Connect your GitHub repo**
+3. **Configure:**
+   - **Project name:** `4ang`
+   - **Production branch:** `main`
+   - **Build command:** `cd client && npm install && npm run build`
+   - **Build output directory:** `client/dist`
+   - **Root directory:** `/` (project root)
+4. **Add Environment Variable:**
+
+| Key | Value |
+|-----|-------|
+| `BACKEND_URL` | `https://YOUR-PROJECT.onrender.com` |
+
+5. **Deploy** → Cloudflare automatically creates `/api/*` proxy via the `functions/api/[[catchall]].js` worker
+
+6. **Verify:** Open `https://4ang.heiennek286.workers.dev`
+
+> **How the proxy works:**
+> Cloudflare Pages automatically picks up `client/functions/api/[[catchall]].js`
+> and routes all `/api/*` requests through this Worker, which forwards them to
+> the `BACKEND_URL` environment variable. No manual VITE_API_URL needed.
+
+### Step 3: Verify
+
+- [ ] Open `https://4ang.heiennek286.workers.dev`
+- [ ] Auth page loads (no 405 error)
+- [ ] Email OTP works (no 403 error)
+- [ ] Home page loads with tracks
+- [ ] Can play music
+- [ ] Search works
+- [ ] Can upload as artist
+- [ ] Admin dashboard works
+
+---
+
+## Option B: Vercel + Render
 
 ### Prerequisites
 - [ ] GitHub account with repo pushed
@@ -224,6 +318,9 @@ vercel --prod
 | Blank page | Check `VITE_API_URL` is correct |
 | Auth redirect wrong | Update `APP_URL` in server env |
 | Slow first load | Render free tier spins down — first request takes ~30s |
+| 405 on /api/* (Cloudflare) | Ensure `client/functions/api/[[catchall]].js` exists and `BACKEND_URL` env var is set |
+| 403 on Supabase /auth/v1/verify | Check Supabase project is not paused (free tier), OTP is not expired, email was actually sent |
+| CORS error (Cloudflare) | Add your `.workers.dev` domain to `CORS_ORIGINS` in Render env vars |
 
 ---
 

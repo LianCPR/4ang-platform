@@ -53,7 +53,7 @@ export default function LeftSidebar({ active, onChange, session, onOpenSettings,
             <div className="sidebar-divider" />
             <div className="sidebar-section">
               <p className="sidebar-section-title">ADMIN</p>
-              <button type="button" className="sidebar-item" onClick={() => onChange("admin")}>
+              <button type="button" className="sidebar-item" onClick={() => { window.location.href = "/admin"; }}>
                 <ShieldCheck size={16} />
                 <span>Dashboard</span>
               </button>

@@ -211,7 +211,17 @@ export default function AuthPage({ onAuthSuccess }) {
       setOtpCode("");
       setStep(STEPS.EMAIL_OTP);
     } catch (err) {
-      setEmailError(err.message || "Không gửi được mã. Thử lại sau.");
+      const msg = err.message || "";
+      // Map Supabase-specific errors to friendly Vietnamese messages
+      if (msg.includes("over_email_send_rate_limit") || msg.includes("email rate limited")) {
+        setEmailError("Bạn đã gửi quá nhiều yêu cầu. Vui lòng đợi vài phút rồi thử lại.");
+      } else if (msg.includes("Signup disabled")) {
+        setEmailError("Đăng ký tạm thời bị tắt. Vui lòng liên hệ hỗ trợ.");
+      } else if (msg.includes("not found") || msg.includes("User not found")) {
+        setEmailError("Không tìm thấy tài khoản với email này.");
+      } else {
+        setEmailError(msg || "Không gửi được mã. Thử lại sau.");
+      }
     }
     setEmailSendBusy(false);
   }
@@ -219,13 +229,33 @@ export default function AuthPage({ onAuthSuccess }) {
   async function handleEmailOTPVerify(codeOverride) {
     const code = codeOverride || otpCode;
     if (code.length !== 6) { setOtpError("Nhập đủ 6 chữ số."); return; }
+    if (otpBusy) return; // Prevent duplicate verification requests
     setOtpError("");
     setOtpBusy(true);
     try {
       let result;
       if (isSupabaseConfigured) {
         // 1) Verify OTP with Supabase Auth → get session
-        const { session } = await verifyEmailOtp(email, code);
+        let session;
+        try {
+          const verifyResult = await verifyEmailOtp(email, code);
+          session = verifyResult.session;
+        } catch (verifyErr) {
+          const msg = verifyErr.message || "";
+          // Map Supabase verifyOtp errors to friendly Vietnamese
+          if (msg.includes("Invalid login credentials") || msg.includes("invalid OTP")) {
+            throw new Error("Mã xác minh không đúng. Vui lòng kiểm tra lại.");
+          } else if (msg.includes("expired") || msg.includes("Token has expired")) {
+            throw new Error("Mã xác minh đã hết hạn. Vui lòng yêu cầu mã mới.");
+          } else if (msg.includes("already been used") || msg.includes("Token已被使用")) {
+            throw new Error("Mã này đã được sử dụng. Vui lòng yêu cầu mã mới.");
+          } else if (msg.includes("ForBidden") || msg.includes("403")) {
+            throw new Error("Xác minh bị từ chối. Dự án Supabase có thể đang bị tạm ngưng. Vui lòng liên hệ hỗ trợ.");
+          } else if (msg.includes("request limit") || msg.includes("rate limit")) {
+            throw new Error("Quá nhiều yêu cầu. Vui lòng đợi vài phút rồi thử lại.");
+          }
+          throw verifyErr;
+        }
         if (!session?.access_token) throw new Error("Không nhận được session từ Supabase.");
 
         // 2) Sync profile with our backend → get backend JWT

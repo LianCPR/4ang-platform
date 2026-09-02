@@ -24,12 +24,12 @@ export function setToken(token) {
   } catch (e) { /* localStorage unavailable, ignore */ }
 }
 
-async function request(path, { method = "GET", body, isForm = false } = {}) {
-  const headers = {};
+async function request(path, { method = "GET", body, isForm = false, headers: extraHeaders } = {}) {
+  const headers = { ...extraHeaders };
   const token = getToken();
-  if (token) headers["Authorization"] = "Bearer " + token;
+  if (token && !headers["Authorization"]) headers["Authorization"] = "Bearer " + token;
   let payload = body;
-  if (body && !isForm) {
+  if (body && !isForm && !headers["Content-Type"]) {
     headers["Content-Type"] = "application/json";
     payload = JSON.stringify(body);
   }
@@ -44,9 +44,14 @@ async function request(path, { method = "GET", body, isForm = false } = {}) {
     // so every call site (auth, upload, likes, ...) benefits at once.
     throw new Error("Không thể kết nối tới máy chủ. Kiểm tra kết nối mạng và thử lại.");
   }
+
+  // Surface useful diagnostics for non-2xx responses
   let data = null;
-  try { data = await res.json(); } catch (e) { /* empty body */ }
-  if (!res.ok) throw new Error((data && data.error) || "Lỗi " + res.status);
+  try { data = await res.json(); } catch (e) { /* empty or non-JSON body */ }
+  if (!res.ok) {
+    if (res.status === 405) throw new Error("API endpoint không tồn tại hoặc phương thức không được hỗ trợ. Kiểm tra VITE_API_URL.");
+    throw new Error((data && data.error) || "Lỗi " + res.status);
+  }
   return data;
 }
 
@@ -83,17 +88,20 @@ export function videoSrcFor(track) {
 export const api = {
   // Supabase Auth — Email OTP (new flow)
   syncProfile: (supabaseToken) => {
-    const API = `${API_BASE_URL}/api/auth/sync-profile`;
-    return fetch(API, {
+    return request("/auth/sync-profile", {
       method: "POST",
+      // Pass the Supabase JWT directly in the Authorization header.
+      // The backend validates it server-side — never trust a user_id from JSON.
       headers: {
-        "Content-Type": "application/json",
         "Authorization": "Bearer " + supabaseToken,
       },
-    }).then(async (res) => {
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Lỗi " + res.status);
-      return data;
+    }).catch((err) => {
+      // Surface clear error messages for common sync-profile failures
+      const msg = err.message || "";
+      if (msg.includes("405")) throw new Error("Backend API không khả dụng. Vui lòng kiểm tra VITE_API_URL.");
+      if (msg.includes("401")) throw new Error("Phiên Supabase không hợp lệ. Vui lòng đăng nhập lại.");
+      if (msg.includes("500")) throw new Error("Lỗi server khi đồng bộ hồ sơ. Thử lại sau.");
+      throw err;
     });
   },
 

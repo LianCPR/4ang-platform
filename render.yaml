@@ -27,9 +27,9 @@ services:
       - key: UPLOAD_DIR
         value: /var/data/uploads
 
-      # CORS — update with your Vercel domain
+      # CORS — update with your frontend domain(s)
       - key: CORS_ORIGINS
-        value: https://4ang.vercel.app,http://localhost:5173
+        value: https://4ang.heiennek286.workers.dev,https://4ang.vercel.app,http://localhost:5173
 
       # App URL (for auth redirects)
       - key: APP_URL
