@@ -1,5 +1,12 @@
+/**
+ * 4ANG Auth Middleware — Supabase PostgreSQL only.
+ *
+ * Verifies Supabase JWT tokens and backend JWTs, resolves user identity,
+ * and sets req.user with id, username, email, isAdmin, isArtist.
+ */
 import jwt from "jsonwebtoken";
 import { verifyToken, getProfile } from "./supabase.js";
+import { supabaseAdmin } from "./supabase.js";
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-only-secret-change-me";
 const USE_SUPABASE = !!process.env.SUPABASE_URL;
@@ -21,44 +28,59 @@ function isSupabaseToken(token) {
   return token && token.startsWith("eyJ") && token.split(".").length === 3;
 }
 
+function getAdminEmails() {
+  return (process.env.ADMIN_EMAILS || "")
+    .split(",")
+    .map(e => e.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function isAdminEmail(email) {
+  if (!email) return false;
+  return getAdminEmails().includes(email.toLowerCase());
+}
+
+async function resolveSupabaseUser(token) {
+  try {
+    const supabaseUser = await verifyToken(token);
+    if (!supabaseUser) return null;
+
+    const profile = await getProfile(supabaseUser.id);
+    if (!profile) return null;
+
+    if (profile.is_restricted) return { restricted: true };
+
+    const emailIsAdmin = isAdminEmail(supabaseUser.email);
+    return {
+      id: supabaseUser.id,
+      username: profile.username,
+      email: supabaseUser.email || profile.email,
+      isAdmin: profile.role === "admin" || emailIsAdmin,
+      isArtist: profile.role === "artist",
+      profile,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function requireAuth(req, res, next) {
   const token = extractToken(req);
   if (!token) return res.status(401).json({ error: "Chưa đăng nhập." });
 
-  // 1) Try Supabase Auth first (if configured)
+  // 1) Try Supabase Auth first
   if (USE_SUPABASE && isSupabaseToken(token)) {
-    try {
-      const supabaseUser = await verifyToken(token);
-      if (supabaseUser) {
-        const profile = await getProfile(supabaseUser.id);
-        if (profile) {
-          if (profile.is_restricted) {
-            return res.status(403).json({ error: "Tài khoản của bạn đã bị hạn chế." });
-          }
-          // Check ADMIN_EMAILS for admin role (covers profiles created before ADMIN_EMAILS was configured)
-          const adminEmails = (process.env.ADMIN_EMAILS || "")
-            .split(",")
-            .map((e) => e.trim().toLowerCase())
-            .filter(Boolean);
-          const emailIsAdmin = supabaseUser.email && adminEmails.includes(supabaseUser.email.toLowerCase());
-          req.user = {
-            id: supabaseUser.id,
-            username: profile.username,
-            email: supabaseUser.email,
-            isAdmin: profile.role === "admin" || emailIsAdmin,
-            isArtist: profile.role === "artist",
-            profile,
-          };
-          return next();
-        }
-        // Supabase user exists but no profile — fall through to legacy
+    const user = await resolveSupabaseUser(token);
+    if (user) {
+      if (user.restricted) {
+        return res.status(403).json({ error: "Tài khoản của bạn đã bị hạn chế." });
       }
-    } catch (e) {
-      // Supabase verification failed — likely a legacy JWT, fall through
+      req.user = user;
+      return next();
     }
   }
 
-  // 2) Fallback to legacy JWT (also handles backend JWTs issued by sync-profile for Supabase users)
+  // 2) Fallback to legacy/backend JWT
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     let email = decoded.email || null;
@@ -66,42 +88,34 @@ export async function requireAuth(req, res, next) {
     let isArtist = !!decoded.is_artist || !!decoded.isArtist;
     let profile = null;
 
-    // Try SQLite first
-    if (decoded.username) {
-      try {
-        const { db } = await import("./db.js");
-        const u = db.prepare("SELECT email, is_admin FROM users WHERE username = ?").get(decoded.username);
-        if (u) { email = u.email || email; isAdmin = !!u.is_admin || isAdmin; }
-      } catch { /* ignore */ }
-    }
+    // For Supabase users with backend JWT (from sync-profile), resolve via Supabase
+    if (USE_SUPABASE && decoded.id) {
+      profile = await getProfile(decoded.id);
+      if (profile) {
+        email = profile.email || email;
+        const emailIsAdmin = isAdminEmail(email);
+        isAdmin = profile.role === "admin" || emailIsAdmin;
+        isArtist = profile.role === "artist";
 
-    // If user not found in SQLite but Supabase is configured, try Supabase profile
-    // This covers backend JWTs issued by sync-profile for Supabase-only users
-    if (USE_SUPABASE && decoded.id && !email) {
-      try {
-        profile = await getProfile(decoded.id);
-        if (profile) {
-          email = profile.email || null;
-          // Check ADMIN_EMAILS for these users too
-          const adminEmails = (process.env.ADMIN_EMAILS || "")
-            .split(",")
-            .map((e) => e.trim().toLowerCase())
-            .filter(Boolean);
-          const emailIsAdmin = email && adminEmails.includes(email.toLowerCase());
-          isAdmin = profile.role === "admin" || emailIsAdmin;
-          isArtist = profile.role === "artist";
+        if (profile.is_restricted) {
+          return res.status(403).json({ error: "Tài khoản của bạn đã bị hạn chế." });
         }
-      } catch { /* ignore */ }
+
+        req.user = {
+          id: decoded.id,
+          username: profile.username,
+          email,
+          isAdmin,
+          isArtist,
+          profile,
+        };
+        return next();
+      }
     }
 
-    req.user = {
-      ...decoded,
-      email,
-      isAdmin,
-      isArtist,
-    };
+    req.user = { ...decoded, email, isAdmin, isArtist };
     return next();
-  } catch (e) {
+  } catch {
     return res.status(401).json({ error: "Phiên đăng nhập không hợp lệ." });
   }
 }
@@ -110,73 +124,32 @@ export async function optionalAuth(req, res, next) {
   const token = extractToken(req);
   if (!token) return next();
 
-  // 1) Try Supabase first
   if (USE_SUPABASE && isSupabaseToken(token)) {
-    try {
-      const supabaseUser = await verifyToken(token);
-      if (supabaseUser) {
-        const profile = await getProfile(supabaseUser.id);
-        if (profile) {
-          // Check ADMIN_EMAILS for admin role (covers profiles created before ADMIN_EMAILS was configured)
-          const adminEmails = (process.env.ADMIN_EMAILS || "")
-            .split(",")
-            .map((e) => e.trim().toLowerCase())
-            .filter(Boolean);
-          const emailIsAdmin = supabaseUser.email && adminEmails.includes(supabaseUser.email.toLowerCase());
-          req.user = {
-            id: supabaseUser.id,
-            username: profile.username,
-            email: supabaseUser.email,
-            isAdmin: profile.role === "admin" || emailIsAdmin,
-            isArtist: profile.role === "artist",
-            profile,
-          };
-          return next();
-        }
-      }
-    } catch (e) {
-      // Supabase failed — fall through to legacy
+    const user = await resolveSupabaseUser(token);
+    if (user && !user.restricted) {
+      req.user = user;
     }
+    return next();
   }
 
-  // 2) Fallback to legacy JWT (also handles backend JWTs issued by sync-profile for Supabase users)
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     let email = decoded.email || null;
     let isAdmin = !!decoded.is_admin || !!decoded.isAdmin;
     let isArtist = !!decoded.is_artist || !!decoded.isArtist;
 
-    if (decoded.username) {
-      try {
-        const { db } = await import("./db.js");
-        const u = db.prepare("SELECT email, is_admin FROM users WHERE username = ?").get(decoded.username);
-        if (u) { email = u.email || email; isAdmin = !!u.is_admin || isAdmin; }
-      } catch { /* ignore */ }
+    if (USE_SUPABASE && decoded.id) {
+      const profile = await getProfile(decoded.id);
+      if (profile) {
+        email = profile.email || email;
+        const emailIsAdmin = isAdminEmail(email);
+        isAdmin = profile.role === "admin" || emailIsAdmin;
+        isArtist = profile.role === "artist";
+      }
     }
 
-    if (USE_SUPABASE && decoded.id && !email) {
-      try {
-        const profile = await getProfile(decoded.id);
-        if (profile) {
-          email = profile.email || null;
-          const adminEmails = (process.env.ADMIN_EMAILS || "")
-            .split(",")
-            .map((e) => e.trim().toLowerCase())
-            .filter(Boolean);
-          const emailIsAdmin = email && adminEmails.includes(email.toLowerCase());
-          isAdmin = profile.role === "admin" || emailIsAdmin;
-          isArtist = profile.role === "artist";
-        }
-      } catch { /* ignore */ }
-    }
-
-    req.user = {
-      ...decoded,
-      email,
-      isAdmin,
-      isArtist,
-    };
-  } catch (e) {
+    req.user = { ...decoded, email, isAdmin, isArtist };
+  } catch {
     // invalid token — continue without auth
   }
   next();
@@ -184,12 +157,7 @@ export async function optionalAuth(req, res, next) {
 
 export function requireAdmin(req, res, next) {
   if (!req.user) return res.status(401).json({ error: "Chưa đăng nhập." });
-  // Check both the profile role AND the ADMIN_EMAILS env var (safety fallback)
-  const adminEmails = (process.env.ADMIN_EMAILS || "")
-    .split(",")
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean);
-  const emailIsAdmin = req.user.email && adminEmails.includes(req.user.email.toLowerCase());
+  const emailIsAdmin = req.user.email && isAdminEmail(req.user.email);
   if (!req.user.isAdmin && !emailIsAdmin) {
     return res.status(403).json({ error: "Chỉ admin mới thực hiện được việc này." });
   }

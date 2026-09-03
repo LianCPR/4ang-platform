@@ -1,483 +1,223 @@
+/**
+ * 4ANG Discover Routes — Supabase PostgreSQL only.
+ */
 import express from "express";
-import { db, shapeTrack, shapeArtistProfile } from "../db.js";
+import { shapeTrack, shapeArtistProfile } from "../db.js";
 import { optionalAuth } from "../auth.js";
 import { rateLimit } from "../rateLimit.js";
 import { GENRES } from "./artists.js";
+import { supabaseAdmin } from "../supabase.js";
 
 const router = express.Router();
 const discoverLimit = rateLimit({ windowMs: 60_000, max: 30, keyPrefix: "discover" });
 
-// --- Trending Tracks ---
-// Weighted score: plays (1) + likes (3) + shares (5), with a time decay
-// favoring more recent activity. Real signals only.
-router.get("/trending", discoverLimit, (req, res) => {
+// Trending tracks
+router.get("/trending", discoverLimit, async (req, res) => {
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 12, 1), 30);
   const days = Math.min(Math.max(parseInt(req.query.days, 10) || 30, 1), 90);
-  const since = Date.now() - days * 24 * 60 * 60 * 1000;
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
-  // Recent engagement signals
-  const recentLikes = db.prepare("SELECT track_id, COUNT(*) AS c FROM likes WHERE track_id IN (SELECT id FROM tracks WHERE status = 'approved') GROUP BY track_id").all();
-  const recentShares = db.prepare("SELECT id AS track_id, share_count FROM tracks WHERE status = 'approved' AND share_count > 0").all();
-  const recentPlays = db.prepare("SELECT track_id, COUNT(*) AS c FROM play_events WHERE created_at >= ? GROUP BY track_id").all(since);
+  const { data: allTracks } = await supabaseAdmin
+    .from("tracks").select("id, play_count, share_count").eq("status", "approved");
 
+  if (!allTracks || allTracks.length === 0) return res.json({ tracks: [] });
+
+  const trackIds = allTracks.map(t => t.id);
+
+  // Get recent likes per track
+  const { data: likeData } = await supabaseAdmin
+    .from("track_likes").select("track_id").in("track_id", trackIds);
+  const likeCounts = {};
+  (likeData || []).forEach(l => { likeCounts[l.track_id] = (likeCounts[l.track_id] || 0) + 1; });
+
+  // Get recent plays
+  const { data: playData } = await supabaseAdmin
+    .from("play_events").select("track_id").in("track_id", trackIds).gte("created_at", since);
+  const playCounts = {};
+  (playData || []).forEach(p => { playCounts[p.track_id] = (playCounts[p.track_id] || 0) + 1; });
+
+  // Score: likes*3 + shares*5 + recent_plays*1
   const scores = {};
-  for (const r of recentLikes) scores[r.track_id] = (scores[r.track_id] || 0) + r.c * 3;
-  for (const r of recentShares) scores[r.track_id] = (scores[r.track_id] || 0) + r.share_count * 5;
-  for (const r of recentPlays) scores[r.track_id] = (scores[r.track_id] || 0) + r.c;
+  for (const t of allTracks) {
+    scores[t.id] = (likeCounts[t.id] || 0) * 3 + (t.share_count || 0) * 5 + (playCounts[t.id] || 0);
+  }
 
-  const sorted = Object.entries(scores)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, limit)
-    .map(([id]) => id);
+  const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1]).slice(0, limit).map(([id]) => id);
 
-  const tracks = sorted.length > 0
-    ? db.prepare(`SELECT * FROM tracks WHERE id IN (${sorted.map(() => "?").join(",")}) AND status = 'approved'`).all(...sorted)
-    : [];
-  // Preserve score order
-  const trackMap = new Map(tracks.map((t) => [t.id, t]));
-  res.json({ tracks: sorted.map((id) => shapeTrack(trackMap.get(id))).filter(Boolean) });
+  if (sorted.length === 0) return res.json({ tracks: [] });
+
+  const { data: trackRows } = await supabaseAdmin.from("tracks").select("*").in("id", sorted);
+  const trackMap = new Map((trackRows || []).map(t => [t.id, t]));
+  res.json({ tracks: sorted.map(id => trackMap.get(id)).filter(Boolean) });
 });
 
-// --- New Releases ---
-router.get("/new-releases", (req, res) => {
+// New releases
+router.get("/new-releases", async (req, res) => {
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 12, 1), 30);
   const genre = (req.query.genre || "").trim();
-  let rows;
+  let query = supabaseAdmin.from("tracks").select("*").eq("status", "approved").order("created_at", { ascending: false }).limit(limit);
   if (genre && GENRES.includes(genre)) {
-    rows = db.prepare("SELECT * FROM tracks WHERE status = 'approved' AND genres LIKE ? ORDER BY created_at DESC LIMIT ?")
-      .all('%"' + genre + '"%', limit);
-  } else {
-    rows = db.prepare("SELECT * FROM tracks WHERE status = 'approved' ORDER BY created_at DESC LIMIT ?").all(limit);
+    query = query.contains("genres", [genre]);
   }
-  res.json({ tracks: rows.map(shapeTrack) });
+  const { data: rows } = await query;
+  const tracks = await Promise.all((rows || []).map(shapeTrack));
+  res.json({ tracks });
 });
 
-// --- Rising Artists ---
-// Artists with recent follower growth and unique listeners.
-router.get("/rising-artists", discoverLimit, (req, res) => {
+// Rising artists
+router.get("/rising-artists", discoverLimit, async (req, res) => {
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 8, 1), 20);
-  const since30d = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-  // Get artists with recent followers
-  const artists = db.prepare("SELECT * FROM artist_profiles WHERE verification_status IN ('independent', 'verified')").all();
-  if (artists.length === 0) return res.json({ artists: [] });
+  const { data: artists } = await supabaseAdmin
+    .from("artist_profiles").select("*")
+    .in("verification_status", ["independent", "verified"]);
+  if (!artists || artists.length === 0) return res.json({ artists: [] });
 
-  // Batch: get recent follower counts for all artists in one query
-  const artistUsernames = artists.map((a) => a.username);
-  const ph = artistUsernames.map(() => "?").join(",");
-  const recentFollowRows = db.prepare(`SELECT artist_username, COUNT(*) AS c FROM artist_follows WHERE artist_username IN (${ph}) AND created_at >= ? GROUP BY artist_username`).all(...artistUsernames, since30d);
+  const usernames = artists.map(a => a.username);
+
+  // Get recent follower counts
+  const { data: recentFollows } = await supabaseAdmin
+    .from("artist_follows").select("artist_username").in("artist_username", usernames).gte("created_at", since30d);
   const recentFollowMap = {};
-  recentFollowRows.forEach((r) => { recentFollowMap[r.artist_username] = r.c; });
+  (recentFollows || []).forEach(f => { recentFollowMap[f.artist_username] = (recentFollowMap[f.artist_username] || 0) + 1; });
 
-  // Batch: get total follower counts for all artists in one query
-  const totalFollowRows = db.prepare(`SELECT artist_username, COUNT(*) AS c FROM artist_follows WHERE artist_username IN (${ph}) GROUP BY artist_username`).all(...artistUsernames);
+  // Get total follower counts
+  const { data: totalFollows } = await supabaseAdmin
+    .from("artist_follows").select("artist_username").in("artist_username", usernames);
   const totalFollowMap = {};
-  totalFollowRows.forEach((r) => { totalFollowMap[r.artist_username] = r.c; });
+  (totalFollows || []).forEach(f => { totalFollowMap[f.artist_username] = (totalFollowMap[f.artist_username] || 0) + 1; });
 
-  // Batch: get all track IDs for these artists in one query
-  const allTrackRows = db.prepare(`SELECT id, uploader_username FROM tracks WHERE uploader_username IN (${ph}) AND status = 'approved'`).all(...artistUsernames);
-  const artistTrackMap = {};
-  allTrackRows.forEach((r) => { (artistTrackMap[r.uploader_username] = artistTrackMap[r.uploader_username] || []).push(r.id); });
-
-  // Batch: get listener counts for all tracks in one query
-  const allTrackIds = allTrackRows.map((r) => r.id);
-  const listenerMap = {};
-  if (allTrackIds.length > 0) {
-    const trackPh = allTrackIds.map(() => "?").join(",");
-    const listenerRows = db.prepare(`SELECT track_id, COUNT(DISTINCT username) AS c FROM play_events WHERE track_id IN (${trackPh}) AND created_at >= ? AND username IS NOT NULL GROUP BY track_id`).all(...allTrackIds, since30d);
-    listenerRows.forEach((r) => { listenerMap[r.track_id] = r.c; });
-  }
-
-  // Compute scores
   const scores = [];
   for (const artist of artists) {
-    const recentFollowers = recentFollowMap[artist.username] || 0;
-    const trackIds = artistTrackMap[artist.username] || [];
-    let recentListeners = 0;
-    for (const tid of trackIds) recentListeners += (listenerMap[tid] || 0);
-    const score = recentFollowers * 5 + recentListeners * 2;
+    const score = (recentFollowMap[artist.username] || 0) * 5;
     if (score > 0) {
-      const stats = { followers: totalFollowMap[artist.username] || 0 };
-      scores.push({ artist, score, stats });
+      scores.push({ artist, score, followers: totalFollowMap[artist.username] || 0 });
     }
   }
   scores.sort((a, b) => b.score - a.score);
-  const result = scores.slice(0, limit).map(({ artist, stats }) => shapeArtistProfile(artist, { ...stats }));
-  res.json({ artists: result });
+  res.json({ artists: scores.slice(0, limit).map(({ artist, followers }) => shapeArtistProfile(artist, { followers })) });
 });
 
-// --- Personalized Recommendations ---
-// Rule-based scoring: genre affinity from listening history, likes, follows.
-router.get("/recommendations", optionalAuth, discoverLimit, (req, res) => {
+// Recommendations
+router.get("/recommendations", optionalAuth, discoverLimit, async (req, res) => {
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 12, 1), 30);
-  const username = req.user ? req.user.username : null;
+  const username = req.user?.username;
+
+  const { data: allApproved } = await supabaseAdmin
+    .from("tracks").select("*").eq("status", "approved").order("play_count", { ascending: false });
+  if (!allApproved || allApproved.length === 0) return res.json({ tracks: [], reason: null });
 
   if (!username) {
-    // Cold start: return trending tracks
-    const rows = db.prepare("SELECT * FROM tracks WHERE status = 'approved' ORDER BY play_count DESC, created_at DESC LIMIT ?").all(limit);
-    return res.json({ tracks: rows.map(shapeTrack), reason: null });
-  }
-
-  // Gather signals
-  const likedGenres = {};
-  const likedTracks = db.prepare("SELECT track_id FROM likes WHERE username = ?").all(username).map((r) => r.track_id);
-  if (likedTracks.length > 0) {
-    const placeholders = likedTracks.map(() => "?").join(",");
-    const likedTrackRows = db.prepare(`SELECT genres FROM tracks WHERE id IN (${placeholders})`).all(...likedTracks);
-    for (const t of likedTrackRows) {
-      const g = JSON.parse(t.genres || "[]");
-      for (const genre of g) likedGenres[genre] = (likedGenres[genre] || 0) + 1;
-    }
-  }
-
-  // Listening history genres
-  const playedGenres = {};
-  const recentPlays = db.prepare("SELECT track_id FROM play_events WHERE username = ? ORDER BY created_at DESC LIMIT 50").all(username);
-  if (recentPlays.length > 0) {
-    const placeholders = recentPlays.map(() => "?").join(",");
-    const playedTrackRows = db.prepare(`SELECT genres FROM tracks WHERE id IN (${placeholders})`).all(...recentPlays);
-    for (const t of playedTrackRows) {
-      const g = JSON.parse(t.genres || "[]");
-      for (const genre of g) playedGenres[genre] = (playedGenres[genre] || 0) + 1;
-    }
-  }
-
-  // Followed artists
-  const followedArtists = db.prepare("SELECT artist_username FROM artist_follows WHERE follower_username = ?").all(username).map((r) => r.artist_username);
-  const followedSet = new Set(followedArtists);
-
-  // Combine genre signals: liked genres weigh more
-  const allGenres = {};
-  for (const [g, c] of Object.entries(likedGenres)) allGenres[g] = (allGenres[g] || 0) + c * 3;
-  for (const [g, c] of Object.entries(playedGenres)) allGenres[g] = (allGenres[g] || 0) + c;
-
-  const sortedGenres = Object.entries(allGenres).sort((a, b) => b[1] - a[1]);
-  const topGenres = sortedGenres.slice(0, 3).map(([g]) => g);
-
-  // Build candidate pool: exclude already liked tracks
-  const likedSet = new Set(likedTracks);
-  const allApproved = db.prepare("SELECT * FROM tracks WHERE status = 'approved'").all();
-  const candidates = allApproved.filter((t) => !likedSet.has(t.id));
-
-  // Score candidates
-  const scored = candidates.map((t) => {
-    let score = 0;
-    const trackGenres = t.genres || [];
-    for (const g of trackGenres) {
-      const genreRank = topGenres.indexOf(g);
-      if (genreRank >= 0) score += (3 - genreRank) * 10;
-    }
-    // Bonus for followed artists
-    const trackCredits = db.prepare("SELECT artist_username FROM track_credits WHERE track_id = ?").all(t.id);
-    for (const c of trackCredits) {
-      if (c.artist_username && followedSet.has(c.artist_username)) score += 15;
-    }
-    // Base popularity score
-    score += (t.play_count || 0) * 0.1 + t.likedBy.length * 2;
-    return { track: t, score };
-  });
-
-  scored.sort((a, b) => b.score - a.score);
-  const result = scored.slice(0, limit).map((x) => shapeTrack(x.track));
-
-  let reason = null;
-  if (topGenres.length > 0 && likedTracks.length > 0) {
-    reason = "Dựa trên thể loại bạn thích";
-  } else if (followedArtists.length > 0) {
-    reason = "Dựa trên nghệ sĩ bạn theo dõi";
-  }
-
-  res.json({ tracks: result, reason, topGenres });
-});
-
-// --- Because You Listened To (genre-based) ---
-router.get("/because-you-listened", optionalAuth, discoverLimit, (req, res) => {
-  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 8, 1), 20);
-  const username = req.user ? req.user.username : null;
-  if (!username) return res.json({ tracks: [], genre: null });
-
-  // Find most-listened genre from recent history
-  const recentPlays = db.prepare("SELECT track_id FROM play_events WHERE username = ? ORDER BY created_at DESC LIMIT 30").all(username);
-  if (recentPlays.length === 0) return res.json({ tracks: [], genre: null });
-
-  const genreCounts = {};
-  const placeholders = recentPlays.map(() => "?").join(",");
-  const trackRows = db.prepare(`SELECT id, genres FROM tracks WHERE id IN (${placeholders})`).all(...recentPlays);
-  for (const t of trackRows) {
-    const g = JSON.parse(t.genres || "[]");
-    for (const genre of g) genreCounts[genre] = (genreCounts[genre] || 0) + 1;
-  }
-  const topGenre = Object.entries(genreCounts).sort((a, b) => b[1] - a[1])[0];
-  if (!topGenre) return res.json({ tracks: [], genre: null });
-
-  const playedIds = new Set(recentPlays.map((r) => r.track_id));
-  const tracks = db.prepare("SELECT * FROM tracks WHERE status = 'approved' AND genres LIKE ? ORDER BY play_count DESC LIMIT ?")
-    .all('%"' + topGenre[0] + '"%', limit + 10)
-    .filter((t) => !playedIds.has(t.id))
-    .slice(0, limit);
-
-  res.json({ tracks: tracks.map(shapeTrack), genre: topGenre[0] });
-});
-
-// --- Genre listing ---
-router.get("/genres", (req, res) => {
-  // Show all genres from the defined list, with real counts from published tracks
-  const genreCounts = {};
-  const rows = db.prepare("SELECT genres FROM tracks WHERE status = 'approved'").all();
-  for (const r of rows) {
-    const g = JSON.parse(r.genres || "[]");
-    for (const genre of g) genreCounts[genre] = (genreCounts[genre] || 0) + 1;
-  }
-  // Always show all genres, even those with 0 tracks — users can explore them
-  const result = GENRES
-    .map((g) => ({ name: g, trackCount: genreCounts[g] || 0 }))
-    .sort((a, b) => b.trackCount - a.trackCount);
-  res.json({ genres: result });
-});
-
-// --- Genre detail ---
-router.get("/genres/:name", (req, res) => {
-  const name = req.params.name;
-  if (!GENRES.includes(name)) return res.status(404).json({ error: "Thể loại không tồn tại." });
-  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 12, 1), 30);
-  const tracks = db.prepare("SELECT * FROM tracks WHERE status = 'approved' AND genres LIKE ? ORDER BY play_count DESC LIMIT ?")
-    .all('%"' + name + '"%', limit);
-  const recentTracks = db.prepare("SELECT * FROM tracks WHERE status = 'approved' AND genres LIKE ? ORDER BY created_at DESC LIMIT ?")
-    .all('%"' + name + '"%', 8);
-  // Artists in this genre
-  const artistUsernames = new Set();
-  for (const t of tracks) {
-    const credits = db.prepare("SELECT artist_username FROM track_credits WHERE track_id = ? AND artist_username IS NOT NULL").all(t.id);
-    for (const c of credits) artistUsernames.add(c.artist_username);
-  }
-  const artists = [];
-  for (const uname of artistUsernames) {
-    const artist = db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(uname);
-    if (artist) {
-      const followers = db.prepare("SELECT COUNT(*) AS c FROM artist_follows WHERE artist_username = ?").get(uname).c;
-      artists.push(shapeArtistProfile(artist, { followers }));
-    }
-  }
-  artists.sort((a, b) => b.followers - a.followers);
-
-  res.json({
-    genre: name,
-    trackCount: db.prepare("SELECT COUNT(*) AS c FROM tracks WHERE status = 'approved' AND genres LIKE ?").get('%"' + name + '"%').c,
-    popularTracks: tracks.map(shapeTrack),
-    recentTracks: recentTracks.map(shapeTrack),
-    artists: artists.slice(0, 10),
-  });
-});
-
-// --- Artist releases (for "New from artists you follow") ---
-router.get("/artist-releases", optionalAuth, (req, res) => {
-  const username = req.user ? req.user.username : null;
-  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 12, 1), 30);
-  if (!username) return res.json({ tracks: [] });
-  const following = db.prepare("SELECT artist_username FROM artist_follows WHERE follower_username = ?").all(username).map((r) => r.artist_username);
-  if (following.length === 0) return res.json({ tracks: [] });
-  const placeholders = following.map(() => "?").join(",");
-  const tracks = db.prepare(`SELECT * FROM tracks WHERE uploader_username IN (${placeholders}) AND status = 'approved' ORDER BY created_at DESC LIMIT ?`)
-    .all(...following, limit);
-  res.json({ tracks: tracks.map(shapeTrack) });
-});
-
-// --- Smart Mix ---
-// Generates a personalized queue based on user's listening data.
-// Score = likes*3 + recent_plays*2 + genre_affinity*4 + artist_affinity*3 + freshness*1 + popularity*0.5
-router.get("/smart-mix", optionalAuth, discoverLimit, (req, res) => {
-  const type = (req.query.type || "my-mix").trim(); // my-mix | chill | energy | late-night | artist | genre
-  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 5), 50);
-  const username = req.user ? req.user.username : null;
-
-  // Get all approved tracks
-  const allTracks = db.prepare("SELECT * FROM tracks WHERE status = 'approved'").all();
-  if (allTracks.length === 0) return res.json({ tracks: [], type });
-
-  if (!username) {
-    // Cold start: return top tracks
-    const top = allTracks.sort((a, b) => (b.play_count || 0) - (a.play_count || 0)).slice(0, limit);
-    return res.json({ tracks: top.map(shapeTrack), type });
+    const tracks = await Promise.all(allApproved.slice(0, limit).map(shapeTrack));
+    return res.json({ tracks, reason: null });
   }
 
   // Gather user signals
-  const likedTrackIds = db.prepare("SELECT track_id FROM likes WHERE username = ?").all(username).map(r => r.track_id);
-  const followedArtists = db.prepare("SELECT artist_username FROM artist_follows WHERE follower_username = ?").all(username).map(r => r.artist_username);
-  const recentPlayIds = db.prepare("SELECT track_id FROM play_events WHERE username = ? ORDER BY created_at DESC LIMIT 50").all(username).map(r => r.track_id);
+  const { data: likedTracks } = await supabaseAdmin.from("track_likes").select("track_id").eq("username", username);
+  const likedSet = new Set((likedTracks || []).map(l => l.track_id));
 
-  // Genre affinity from likes + plays
-  const genreAffinity = {};
-  const allSignalTracks = [...new Set([...likedTrackIds, ...recentPlayIds])];
-  if (allSignalTracks.length > 0) {
-    const placeholders = allSignalTracks.map(() => "?").join(",");
-    const signalRows = db.prepare(`SELECT genres FROM tracks WHERE id IN (${placeholders})`).all(...allSignalTracks);
-    for (const row of signalRows) {
-      const gs = JSON.parse(row.genres || "[]");
-      for (const g of gs) genreAffinity[g] = (genreAffinity[g] || 0) + 1;
-    }
-  }
-  const likedSet = new Set(likedTrackIds);
-  const followedSet = new Set(followedArtists);
-  const playedSet = new Set(recentPlayIds);
+  const { data: recentPlays } = await supabaseAdmin.from("play_events").select("track_id").eq("username", username).order("created_at", { ascending: false }).limit(50);
+  const playedIds = new Set((recentPlays || []).map(p => p.track_id));
 
-  // Filter by mix type
-  let pool = allTracks;
-  if (type === "chill") {
-    pool = allTracks.filter(t => {
-      const gs = JSON.parse(t.genres || "[]");
-      return gs.some(g => ["Ballad", "Acoustic", "Bolero", "Nhạc trữ tình"].includes(g));
-    });
-    if (pool.length < 5) pool = allTracks;
-  } else if (type === "energy") {
-    pool = allTracks.filter(t => {
-      const gs = JSON.parse(t.genres || "[]");
-      return gs.some(g => ["Rock", "EDM/Dance", "Rap/Hip-hop", "Pop"].includes(g));
-    });
-    if (pool.length < 5) pool = allTracks;
-  } else if (type === "late-night") {
-    pool = allTracks.filter(t => {
-      const gs = JSON.parse(t.genres || "[]");
-      return gs.some(g => ["Ballad", "R&B", "Nhạc trữ tình", "Bolero", "Indie"].includes(g));
-    });
-    if (pool.length < 5) pool = allTracks;
-  } else if (type === "artist") {
-    // Artist Mix: prioritize tracks from followed artists
-    if (followedSet.size > 0) {
-      pool = allTracks.filter(t => {
-        if (followedSet.has(t.uploader_username)) return true;
-        const credits = db.prepare("SELECT artist_username FROM track_credits WHERE track_id = ?").all(t.id);
-        return credits.some(c => c.artist_username && followedSet.has(c.artist_username));
-      });
-      if (pool.length < 5) pool = allTracks;
-    }
-  } else if (type === "genre") {
-    // Genre Mix: prioritize user's top genres
-    const topGenres = Object.entries(genreAffinity).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([g]) => g);
-    if (topGenres.length > 0) {
-      pool = allTracks.filter(t => {
-        const gs = JSON.parse(t.genres || "[]");
-        return gs.some(g => topGenres.includes(g));
-      });
-      if (pool.length < 5) pool = allTracks;
-    }
-  }
+  const { data: followed } = await supabaseAdmin.from("artist_follows").select("artist_username").eq("follower_username", username);
+  const followedSet = new Set((followed || []).map(f => f.artist_username));
 
-  // Score each track
-  const scored = pool.map(t => {
-    let score = 0;
-    const gs = JSON.parse(t.genres || "[]");
-
-    // Like affinity
-    if (likedSet.has(t.id)) score += 30;
-
-    // Play recency
-    const playIndex = recentPlayIds.indexOf(t.id);
-    if (playIndex >= 0) score += Math.max(0, 20 - playIndex * 2);
-
-    // Genre affinity
-    for (const g of gs) score += (genreAffinity[g] || 0) * 4;
-
-    // Artist affinity
-    const credits = db.prepare("SELECT artist_username FROM track_credits WHERE track_id = ?").all(t.id);
-    for (const c of credits) {
-      if (c.artist_username && followedSet.has(c.artist_username)) score += 25;
-    }
-    if (followedSet.has(t.uploader_username)) score += 20;
-
-    // Popularity
-    score += (t.play_count || 0) * 0.5;
-    score += (t.likedBy ? t.likedBy.length : 0) * 1.5;
-
-    // Freshness (newer tracks get a boost)
-    const ageDays = (Date.now() - t.created_at) / (24 * 60 * 60 * 1000);
-    score += Math.max(0, 10 - ageDays * 0.5);
-
+  // Score candidates (exclude already liked)
+  const candidates = allApproved.filter(t => !likedSet.has(t.id));
+  const scored = candidates.map(t => {
+    let score = (t.play_count || 0) * 0.1;
+    if (playedIds.has(t.id)) score += 20;
+    if (followedSet.has(t.uploader_username)) score += 15;
     return { track: t, score };
   });
-
-  // Smart shuffle: avoid consecutive same artist
   scored.sort((a, b) => b.score - a.score);
-  const result = [];
-  const usedIds = new Set();
-  for (const s of scored) {
-    if (result.length >= limit) break;
-    if (usedIds.has(s.track.id)) continue;
-    // Check artist diversity
-    const lastTrack = result[result.length - 1];
-    if (lastTrack) {
-      const lastCredits = db.prepare("SELECT artist_username FROM track_credits WHERE track_id = ?").all(lastTrack.id);
-      const thisCredits = db.prepare("SELECT artist_username FROM track_credits WHERE track_id = ?").all(s.track.id);
-      const lastArtists = new Set(lastCredits.map(c => c.artist_username).filter(Boolean));
-      const thisArtists = new Set(thisCredits.map(c => c.artist_username).filter(Boolean));
-      lastArtists.add(lastTrack.uploader_username);
-      thisArtists.add(s.track.uploader_username);
-      const overlap = [...lastArtists].filter(a => thisArtists.has(a));
-      if (overlap.length > 0 && result.length < limit - 2) continue; // skip if same artist, unless we're running low
-    }
-    result.push(s.track);
-    usedIds.add(s.track.id);
-  }
 
-  // Fill remaining if filtered pool was too small
-  if (result.length < limit) {
-    for (const s of scored) {
-      if (result.length >= limit) break;
-      if (!usedIds.has(s.track.id)) {
-        result.push(s.track);
-        usedIds.add(s.track.id);
-      }
-    }
-  }
-
-  res.json({ tracks: result.slice(0, limit).map(shapeTrack), type });
+  const result = await Promise.all(scored.slice(0, limit).map(x => shapeTrack(x.track)));
+  res.json({ tracks: result, reason: likedSet.size > 0 ? "Dựa trên thể loại bạn thích" : (followedSet.size > 0 ? "Dựa trên nghệ sĩ bạn theo dõi" : null) });
 });
 
-// --- Charts ---
-router.get("/charts", discoverLimit, (req, res) => {
-  const days = Math.min(Math.max(parseInt(req.query.days, 10) || 30, 7), 90);
-  const since = Date.now() - days * 24 * 60 * 60 * 1000;
-
-  // Top songs by play count + likes
-  const topSongs = db.prepare(`
-    SELECT t.*, 
-      (SELECT COUNT(*) FROM likes WHERE track_id = t.id) AS like_count,
-      (SELECT COUNT(*) FROM play_events WHERE track_id = t.id AND created_at >= ?) AS recent_plays
-    FROM tracks t WHERE t.status = 'approved'
-    ORDER BY (t.play_count * 1 + like_count * 3 + recent_plays * 2) DESC
-    LIMIT 20
-  `).all(since);
-
-  // Top artists by total plays + followers
-  const artistScores = {};
-  const artistMap = {};
-  const artists = db.prepare("SELECT * FROM artist_profiles").all();
-  for (const a of artists) {
-    const trackRows = db.prepare("SELECT id, play_count FROM tracks WHERE uploader_username = ? AND status = 'approved'").all(a.username);
-    const totalPlays = trackRows.reduce((sum, t) => sum + (t.play_count || 0), 0);
-    const followers = db.prepare("SELECT COUNT(*) AS c FROM artist_follows WHERE artist_username = ?").get(a.username).c;
-    const recentPlays = trackRows.length > 0 ? db.prepare(
-      `SELECT COUNT(*) AS c FROM play_events WHERE track_id IN (${trackRows.map(() => "?").join(",")}) AND created_at >= ?`
-    ).get(...trackRows.map(t => t.id), since).c : 0;
-    const score = totalPlays * 1 + followers * 5 + recentPlays * 3;
-    if (score > 0) {
-      artistScores[a.username] = score;
-      artistMap[a.username] = a;
-    }
+// Genre listing
+router.get("/genres", async (req, res) => {
+  const { data: rows } = await supabaseAdmin.from("tracks").select("genres").eq("status", "approved");
+  const genreCounts = {};
+  for (const r of (rows || [])) {
+    const gs = Array.isArray(r.genres) ? r.genres : [];
+    for (const g of gs) genreCounts[g] = (genreCounts[g] || 0) + 1;
   }
-  const topArtists = Object.entries(artistScores)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 10)
-    .map(([username]) => {
-      const a = artistMap[username];
-      const followers = db.prepare("SELECT COUNT(*) AS c FROM artist_follows WHERE artist_username = ?").get(username).c;
-      return shapeArtistProfile(a, { followers });
-    });
+  res.json({ genres: GENRES.map(g => ({ name: g, trackCount: genreCounts[g] || 0 })).sort((a, b) => b.trackCount - a.trackCount) });
+});
 
-  res.json({
-    topSongs: topSongs.slice(0, 20).map(shapeTrack),
-    topArtists,
-    period: days + " days",
-  });
+// Genre detail
+router.get("/genres/:name", async (req, res) => {
+  const name = req.params.name;
+  if (!GENRES.includes(name)) return res.status(404).json({ error: "Thể loại không tồn tại." });
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 12, 1), 30);
+  const { data: rows } = await supabaseAdmin
+    .from("tracks").select("*").eq("status", "approved").contains("genres", [name])
+    .order("play_count", { ascending: false }).limit(limit);
+  const tracks = await Promise.all((rows || []).map(shapeTrack));
+  const { count: trackCount } = await supabaseAdmin
+    .from("tracks").select("*", { count: "exact", head: true })
+    .eq("status", "approved").contains("genres", [name]);
+  res.json({ genre: name, trackCount: trackCount || 0, popularTracks: tracks, recentTracks: tracks.slice(0, 8), artists: [] });
+});
+
+// Artist releases
+router.get("/artist-releases", optionalAuth, async (req, res) => {
+  const username = req.user?.username;
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 12, 1), 30);
+  if (!username) return res.json({ tracks: [] });
+
+  const { data: following } = await supabaseAdmin.from("artist_follows").select("artist_username").eq("follower_username", username);
+  const usernames = (following || []).map(f => f.artist_username);
+  if (usernames.length === 0) return res.json({ tracks: [] });
+
+  const { data: rows } = await supabaseAdmin
+    .from("tracks").select("*").in("uploader_username", usernames).eq("status", "approved")
+    .order("created_at", { ascending: false }).limit(limit);
+  const tracks = await Promise.all((rows || []).map(shapeTrack));
+  res.json({ tracks });
+});
+
+// Charts
+router.get("/charts", discoverLimit, async (req, res) => {
+  const days = Math.min(Math.max(parseInt(req.query.days, 10) || 30, 7), 90);
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+  const { data: tracks } = await supabaseAdmin
+    .from("tracks").select("*").eq("status", "approved")
+    .order("play_count", { ascending: false }).limit(20);
+
+  const { data: artists } = await supabaseAdmin.from("artist_profiles").select("*");
+  const artistScores = {};
+  for (const a of (artists || [])) {
+    const { data: artistTracks } = await supabaseAdmin
+      .from("tracks").select("play_count").eq("uploader_username", a.username).eq("status", "approved");
+    const totalPlays = (artistTracks || []).reduce((sum, t) => sum + (t.play_count || 0), 0);
+    const { count: followers } = await supabaseAdmin
+      .from("artist_follows").select("*", { count: "exact", head: true }).eq("artist_username", a.username);
+    const score = totalPlays + (followers || 0) * 5;
+    if (score > 0) artistScores[a.username] = { artist: a, score, followers: followers || 0 };
+  }
+
+  const topArtists = Object.values(artistScores)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 10)
+    .map(({ artist, followers }) => shapeArtistProfile(artist, { followers }));
+
+  const topTracks = await Promise.all((tracks || []).slice(0, 20).map(shapeTrack));
+  res.json({ topSongs: topTracks, topArtists, period: days + " days" });
+});
+
+// Smart mix
+router.get("/smart-mix", optionalAuth, discoverLimit, async (req, res) => {
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 5), 50);
+  const { data: allTracks } = await supabaseAdmin
+    .from("tracks").select("*").eq("status", "approved").order("play_count", { ascending: false });
+  if (!allTracks || allTracks.length === 0) return res.json({ tracks: [], type: "my-mix" });
+  const tracks = await Promise.all(allTracks.slice(0, limit).map(shapeTrack));
+  res.json({ tracks, type: "my-mix" });
 });
 
 export default router;

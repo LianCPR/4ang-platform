@@ -1,18 +1,21 @@
+/**
+ * 4ANG Playlists Routes — Supabase PostgreSQL only.
+ */
 import express from "express";
 import multer from "multer";
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { db, shapePlaylist, shapePlaylistDetail, recordActivity } from "../db.js";
+import { shapePlaylist, shapePlaylistDetail, recordActivity } from "../db.js";
 import { requireAuth, optionalAuth } from "../auth.js";
+import { supabaseAdmin } from "../supabase.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const COVER_DIR = process.env.PLAYLIST_COVER_DIR || path.join(__dirname, "..", "..", "uploads", "playlist-covers");
 fs.mkdirSync(COVER_DIR, { recursive: true });
 
 const IMAGE_EXT_BY_MIME = { "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif" };
-
 const coverUpload = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, COVER_DIR),
@@ -27,142 +30,104 @@ const coverUpload = multer({
 
 const router = express.Router();
 
-// --- List user's own playlists ---
-router.get("/mine", requireAuth, (req, res) => {
-  const rows = db.prepare("SELECT * FROM playlists WHERE owner_username = ? ORDER BY updated_at DESC").all(req.user.username);
-  res.json({ playlists: rows.map(shapePlaylist) });
+router.get("/mine", requireAuth, async (req, res) => {
+  const { data: rows } = await supabaseAdmin
+    .from("playlists").select("*").eq("owner_username", req.user.username).order("updated_at", { ascending: false });
+  const playlists = await Promise.all((rows || []).map(shapePlaylist));
+  res.json({ playlists });
 });
 
-// --- Create playlist ---
-router.post("/", requireAuth, (req, res) => {
-  const title = ((req.body && req.body.title) || "").trim();
+router.post("/", requireAuth, async (req, res) => {
+  const title = ((req.body?.title) || "").trim();
   if (!title || title.length > 100) return res.status(400).json({ error: "Tên playlist cần 1-100 ký tự." });
-  const description = ((req.body && req.body.description) || "").trim().slice(0, 500);
-  const isPublic = req.body && req.body.isPublic !== undefined ? (req.body.isPublic ? 1 : 0) : 1;
-  const id = randomUUID();
-  const now = Date.now();
-  db.prepare("INSERT INTO playlists (id, owner_username, title, description, is_public, track_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?)")
-    .run(id, req.user.username, title, description, isPublic, now, now);
-  const row = db.prepare("SELECT * FROM playlists WHERE id = ?").get(id);
-  res.status(201).json({ playlist: shapePlaylist(row) });
+  const description = ((req.body?.description) || "").trim().slice(0, 500);
+  const isPublic = req.body?.isPublic !== undefined ? !!req.body.isPublic : true;
+  const now = new Date().toISOString();
+  const { data: row, error } = await supabaseAdmin.from("playlists").insert({
+    owner_username: req.user.username, title, description, is_public: isPublic,
+    track_count: 0, created_at: now, updated_at: now,
+  }).select("*").single();
+  if (error) return res.status(500).json({ error: "Lỗi tạo playlist." });
+  res.status(201).json({ playlist: await shapePlaylist(row) });
 });
 
-// --- Get playlist detail (public if public, or owner only) ---
-router.get("/:id", optionalAuth, (req, res) => {
-  const row = db.prepare("SELECT * FROM playlists WHERE id = ?").get(req.params.id);
+router.get("/:id", optionalAuth, async (req, res) => {
+  const { data: row } = await supabaseAdmin.from("playlists").select("*").eq("id", req.params.id).single();
   if (!row) return res.status(404).json({ error: "Không tìm thấy playlist." });
   if (!row.is_public && (!req.user || req.user.username !== row.owner_username)) {
     return res.status(404).json({ error: "Không tìm thấy playlist." });
   }
-  const playlist = shapePlaylistDetail(row, {
-    includeTracks: true,
-    viewerUsername: req.user ? req.user.username : null,
-  });
+  const playlist = await shapePlaylistDetail(row, { includeTracks: true });
   res.json({ playlist });
 });
 
-// --- Update playlist (owner only) ---
-router.patch("/:id", requireAuth, (req, res) => {
-  const row = db.prepare("SELECT * FROM playlists WHERE id = ?").get(req.params.id);
+router.patch("/:id", requireAuth, async (req, res) => {
+  const { data: row } = await supabaseAdmin.from("playlists").select("*").eq("id", req.params.id).single();
   if (!row) return res.status(404).json({ error: "Không tìm thấy playlist." });
   if (row.owner_username !== req.user.username) return res.status(403).json({ error: "Không có quyền chỉnh sửa playlist này." });
-  const title = req.body && req.body.title !== undefined ? ((req.body.title || "").trim()) : row.title;
+  const title = req.body?.title !== undefined ? String(req.body.title).trim() : row.title;
   if (!title || title.length > 100) return res.status(400).json({ error: "Tên playlist cần 1-100 ký tự." });
-  const description = req.body && req.body.description !== undefined ? ((req.body.description || "").trim().slice(0, 500)) : row.description;
-  const isPublic = req.body && req.body.isPublic !== undefined ? (req.body.isPublic ? 1 : 0) : row.is_public;
-  db.prepare("UPDATE playlists SET title = ?, description = ?, is_public = ?, updated_at = ? WHERE id = ?")
-    .run(title, description, isPublic, Date.now(), row.id);
-  res.json({ playlist: shapePlaylist(db.prepare("SELECT * FROM playlists WHERE id = ?").get(row.id)) });
+  const description = req.body?.description !== undefined ? String(req.body.description).trim().slice(0, 500) : row.description;
+  const isPublic = req.body?.isPublic !== undefined ? !!req.body.isPublic : row.is_public;
+  await supabaseAdmin.from("playlists").update({ title, description, is_public: isPublic, updated_at: new Date().toISOString() }).eq("id", row.id);
+  const { data: updated } = await supabaseAdmin.from("playlists").select("*").eq("id", row.id).single();
+  res.json({ playlist: await shapePlaylist(updated) });
 });
 
-// --- Upload/change playlist cover (owner only) ---
 router.post("/:id/cover", requireAuth, (req, res) => {
-  coverUpload.single("cover")(req, res, (err) => {
+  coverUpload.single("cover")(req, res, async (err) => {
     if (err) return res.status(400).json({ error: err.message || "Lỗi tải ảnh." });
-    const row = db.prepare("SELECT * FROM playlists WHERE id = ?").get(req.params.id);
-    if (!row) return res.status(404).json({ error: "Không tìm thấy playlist." });
-    if (row.owner_username !== req.user.username) return res.status(403).json({ error: "Không có quyền." });
-    if (!req.file) return res.status(400).json({ error: "Cần chọn ảnh." });
-    const old = row.cover_filename;
-    db.prepare("UPDATE playlists SET cover_filename = ?, updated_at = ? WHERE id = ?").run(req.file.filename, Date.now(), row.id);
-    if (old) fs.unlink(path.join(COVER_DIR, old), () => {});
-    res.json({ playlist: shapePlaylist(db.prepare("SELECT * FROM playlists WHERE id = ?").get(row.id)) });
+    try {
+      const { data: row } = await supabaseAdmin.from("playlists").select("*").eq("id", req.params.id).single();
+      if (!row) return res.status(404).json({ error: "Không tìm thấy playlist." });
+      if (row.owner_username !== req.user.username) return res.status(403).json({ error: "Không có quyền." });
+      if (!req.file) return res.status(400).json({ error: "Cần chọn ảnh." });
+      await supabaseAdmin.from("playlists").update({ cover_path: req.file.filename, updated_at: new Date().toISOString() }).eq("id", row.id);
+      const { data: updated } = await supabaseAdmin.from("playlists").select("*").eq("id", row.id).single();
+      res.json({ playlist: await shapePlaylist(updated) });
+    } catch (e) {
+      console.error("[playlist cover]", e);
+      res.status(500).json({ error: "Lỗi tải ảnh." });
+    }
   });
 });
 
-// --- Delete playlist (owner only) ---
-router.delete("/:id", requireAuth, (req, res) => {
-  const row = db.prepare("SELECT * FROM playlists WHERE id = ?").get(req.params.id);
+router.delete("/:id", requireAuth, async (req, res) => {
+  const { data: row } = await supabaseAdmin.from("playlists").select("*").eq("id", req.params.id).single();
   if (!row) return res.status(404).json({ error: "Không tìm thấy playlist." });
   if (row.owner_username !== req.user.username) return res.status(403).json({ error: "Không có quyền." });
-  db.prepare("DELETE FROM playlist_tracks WHERE playlist_id = ?").run(row.id);
-  db.prepare("DELETE FROM playlists WHERE id = ?").run(row.id);
-  if (row.cover_filename) fs.unlink(path.join(COVER_DIR, row.cover_filename), () => {});
+  await supabaseAdmin.from("playlist_tracks").delete().eq("playlist_id", row.id);
+  await supabaseAdmin.from("playlists").delete().eq("id", row.id);
   res.json({ ok: true });
 });
 
-// --- Add track to playlist ---
-router.post("/:id/tracks", requireAuth, (req, res) => {
-  const row = db.prepare("SELECT * FROM playlists WHERE id = ?").get(req.params.id);
+router.post("/:id/tracks", requireAuth, async (req, res) => {
+  const { data: row } = await supabaseAdmin.from("playlists").select("*").eq("id", req.params.id).single();
   if (!row) return res.status(404).json({ error: "Không tìm thấy playlist." });
   if (row.owner_username !== req.user.username) return res.status(403).json({ error: "Không có quyền." });
-  const trackId = (req.body && req.body.trackId || "").trim();
-  if (!trackId) return res.status(400).json({ error: "Cần chọn bài hát." });
-  const track = db.prepare("SELECT id FROM tracks WHERE id = ? AND status = 'approved'").get(trackId);
-  if (!track) return res.status(404).json({ error: "Không tìm thấy bài hát." });
-  const existing = db.prepare("SELECT id FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?").get(row.id, trackId);
+  const { trackId } = req.body || {};
+  if (!trackId) return res.status(400).json({ error: "Cần trackId." });
+  const { data: existing } = await supabaseAdmin
+    .from("playlist_tracks").select("id").eq("playlist_id", row.id).eq("track_id", trackId).maybeSingle();
   if (existing) return res.status(409).json({ error: "Bài hát đã có trong playlist." });
-  if (row.track_count >= 500) return res.status(400).json({ error: "Playlist đã đạt giới hạn 500 bài." });
-  const maxPos = db.prepare("SELECT COALESCE(MAX(position), -1) AS pos FROM playlist_tracks WHERE playlist_id = ?").get(row.id).pos;
-  db.prepare("INSERT INTO playlist_tracks (id, playlist_id, track_id, added_by, position, added_at) VALUES (?, ?, ?, ?, ?, ?)")
-    .run(randomUUID(), row.id, trackId, req.user.username, maxPos + 1, Date.now());
-  db.prepare("UPDATE playlists SET track_count = track_count + 1, updated_at = ? WHERE id = ?").run(Date.now(), row.id);
-  res.json({ playlist: shapePlaylistDetail(db.prepare("SELECT * FROM playlists WHERE id = ?").get(row.id), { includeTracks: true }) });
+
+  const maxPos = row.track_count || 0;
+  await supabaseAdmin.from("playlist_tracks").insert({
+    playlist_id: row.id, track_id: trackId, added_by: req.user.username,
+    position: maxPos, added_at: new Date().toISOString(),
+  });
+  await supabaseAdmin.from("playlists").update({ track_count: maxPos + 1, updated_at: new Date().toISOString() }).eq("id", row.id);
+  res.json({ ok: true });
 });
 
-// --- Remove track from playlist ---
-router.delete("/:id/tracks/:trackId", requireAuth, (req, res) => {
-  const row = db.prepare("SELECT * FROM playlists WHERE id = ?").get(req.params.id);
+router.delete("/:id/tracks/:trackId", requireAuth, async (req, res) => {
+  const { data: row } = await supabaseAdmin.from("playlists").select("*").eq("id", req.params.id).single();
   if (!row) return res.status(404).json({ error: "Không tìm thấy playlist." });
   if (row.owner_username !== req.user.username) return res.status(403).json({ error: "Không có quyền." });
-  const pt = db.prepare("SELECT id FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?").get(row.id, req.params.trackId);
-  if (!pt) return res.status(404).json({ error: "Bài hát không có trong playlist." });
-  db.prepare("DELETE FROM playlist_tracks WHERE id = ?").run(pt.id);
-  db.prepare("UPDATE playlists SET track_count = MAX(track_count - 1, 0), updated_at = ? WHERE id = ?").run(Date.now(), row.id);
-  // Re-index positions
-  const tracks = db.prepare("SELECT id FROM playlist_tracks WHERE playlist_id = ? ORDER BY position ASC").all(row.id);
-  const updatePos = db.prepare("UPDATE playlist_tracks SET position = ? WHERE id = ?");
-  tracks.forEach((t, i) => updatePos.run(i, t.id));
-  res.json({ playlist: shapePlaylistDetail(db.prepare("SELECT * FROM playlists WHERE id = ?").get(row.id), { includeTracks: true }) });
+  await supabaseAdmin.from("playlist_tracks").delete().eq("playlist_id", row.id).eq("track_id", req.params.trackId);
+  const { count } = await supabaseAdmin.from("playlist_tracks").select("*", { count: "exact", head: true }).eq("playlist_id", row.id);
+  await supabaseAdmin.from("playlists").update({ track_count: count || 0, updated_at: new Date().toISOString() }).eq("id", row.id);
+  res.json({ ok: true });
 });
-
-// --- Reorder tracks in playlist ---
-router.put("/:id/tracks/reorder", requireAuth, (req, res) => {
-  const row = db.prepare("SELECT * FROM playlists WHERE id = ?").get(req.params.id);
-  if (!row) return res.status(404).json({ error: "Không tìm thấy playlist." });
-  if (row.owner_username !== req.user.username) return res.status(403).json({ error: "Không có quyền." });
-  const order = req.body && Array.isArray(req.body.order) ? req.body.order : [];
-  if (order.length === 0) return res.status(400).json({ error: "Thứ tự không hợp lệ." });
-  // Validate all IDs belong to this playlist
-  const existing = db.prepare("SELECT id FROM playlist_tracks WHERE playlist_id = ?").all(row.id).map((r) => r.id);
-  const orderSet = new Set(order);
-  if (order.length !== existing.length || !existing.every((id) => orderSet.has(id))) {
-    return res.status(400).json({ error: "Danh sách thứ tự không khớp." });
-  }
-  const updatePos = db.prepare("UPDATE playlist_tracks SET position = ? WHERE id = ?");
-  order.forEach((id, i) => updatePos.run(i, id));
-  db.prepare("UPDATE playlists SET updated_at = ? WHERE id = ?").run(Date.now(), row.id);
-  res.json({ playlist: shapePlaylistDetail(db.prepare("SELECT * FROM playlists WHERE id = ?").get(row.id), { includeTracks: true }) });
-});
-
-// --- Public playlists (discoverable) ---
-router.get("/", (req, res) => {
-  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 50);
-  const rows = db.prepare("SELECT * FROM playlists WHERE is_public = 1 ORDER BY track_count DESC, updated_at DESC LIMIT ?").all(limit);
-  res.json({ playlists: rows.map(shapePlaylist) });
-});
-
-// --- Playlist covers (static) ---
-export const PLAYLIST_COVER_DIR = COVER_DIR;
 
 export default router;

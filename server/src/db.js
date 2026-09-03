@@ -1,386 +1,123 @@
-import { DatabaseSync } from "node:sqlite";
-import path from "node:path";
-import fs from "node:fs";
-import { fileURLToPath } from "node:url";
-import { getFileUrl } from "./storage.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.join(__dirname, "..", "data");
-fs.mkdirSync(DATA_DIR, { recursive: true });
-const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, "app.sqlite");
-
-export const db = new DatabaseSync(DB_PATH);
-
-db.exec(`
-CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  username TEXT UNIQUE NOT NULL,
-  password_hash TEXT NOT NULL,
-  display_name TEXT NOT NULL,
-  is_admin INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS tracks (
-  id TEXT PRIMARY KEY,
-  title TEXT NOT NULL,
-  composer TEXT,
-  description TEXT,
-  release_date TEXT,
-  lyrics TEXT,
-  audio_filename TEXT NOT NULL,
-  uploader_username TEXT NOT NULL,
-  uploader_display_name TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending',
-  share_count INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL,
-  reviewed_at INTEGER,
-  reviewed_by TEXT
-);
-
-CREATE TABLE IF NOT EXISTS likes (
-  track_id TEXT NOT NULL,
-  username TEXT NOT NULL,
-  PRIMARY KEY (track_id, username)
-);
-
-CREATE TABLE IF NOT EXISTS saves (
-  track_id TEXT NOT NULL,
-  username TEXT NOT NULL,
-  PRIMARY KEY (track_id, username)
-);
-
-CREATE TABLE IF NOT EXISTS comments (
-  id TEXT PRIMARY KEY,
-  track_id TEXT NOT NULL,
-  username TEXT NOT NULL,
-  display_name TEXT NOT NULL,
-  text TEXT NOT NULL,
-  created_at INTEGER NOT NULL
-);
-`);
-
-// Migration: add play_count to installs created before this column existed.
-// SQLite has no "ADD COLUMN IF NOT EXISTS" — the try/catch is the idiom.
-try { db.exec("ALTER TABLE tracks ADD COLUMN play_count INTEGER NOT NULL DEFAULT 0"); } catch (e) { /* already present */ }
-
-// Migration: OAuth-linked identity columns. Nullable — most accounts are
-// still plain username/password. Partial unique indexes (rather than a
-// UNIQUE column constraint) so many NULLs are allowed but no two accounts
-// can ever share the same real provider id.
-try { db.exec("ALTER TABLE users ADD COLUMN email TEXT"); } catch (e) { /* already present */ }
-try { db.exec("ALTER TABLE users ADD COLUMN google_id TEXT"); } catch (e) { /* already present */ }
-try { db.exec("ALTER TABLE users ADD COLUMN facebook_id TEXT"); } catch (e) { /* already present */ }
-db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id) WHERE google_id IS NOT NULL");
-db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_facebook_id ON users(facebook_id) WHERE facebook_id IS NOT NULL");
-
-// --- Artist system (Phase 5) ---
-// A separate table, not more columns bolted onto `users` — an artist
-// profile is a distinct entity with its own lifecycle (bio, images,
-// verification review), and keying it by username avoids inventing a
-// second identity/slug system on top of the one that already exists.
-db.exec(`
-  CREATE TABLE IF NOT EXISTS artist_profiles (
-    username TEXT PRIMARY KEY,
-    artist_name TEXT NOT NULL,
-    bio TEXT NOT NULL DEFAULT '',
-    avatar_filename TEXT,
-    cover_filename TEXT,
-    genres TEXT NOT NULL DEFAULT '[]',
-    links TEXT NOT NULL DEFAULT '[]',
-    verification_status TEXT NOT NULL DEFAULT 'independent',
-    verification_note TEXT,
-    verification_requested_at INTEGER,
-    verified_at INTEGER,
-    created_at INTEGER NOT NULL,
-    FOREIGN KEY (username) REFERENCES users(username)
-  );
-  CREATE TABLE IF NOT EXISTS artist_follows (
-    follower_username TEXT NOT NULL,
-    artist_username TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    PRIMARY KEY (follower_username, artist_username)
-  );
-  CREATE TABLE IF NOT EXISTS play_events (
-    id TEXT PRIMARY KEY,
-    track_id TEXT NOT NULL,
-    username TEXT,
-    created_at INTEGER NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS idx_play_events_track ON play_events(track_id, created_at);
-`);
-
-// --- Submissions (Phase 6) ---
-// A submission is a separate staging entity from `tracks` on purpose: an
-// artist's request must be editable, re-reviewable, and fully withdrawable
-// without ever touching (or half-creating) a real published track. Only
-// `POST /:id/publish` (admin-only) ever inserts into `tracks`.
-db.exec(`
-  CREATE TABLE IF NOT EXISTS submissions (
-    id TEXT PRIMARY KEY,
-    artist_username TEXT NOT NULL,
-    title TEXT NOT NULL,
-    release_type TEXT NOT NULL DEFAULT 'single',
-    audio_filename TEXT,
-    audio_original_name TEXT,
-    audio_checksum TEXT,
-    cover_filename TEXT,
-    video_filename TEXT,
-    lyrics TEXT NOT NULL DEFAULT '',
-    genres TEXT NOT NULL DEFAULT '[]',
-    language TEXT,
-    is_explicit INTEGER NOT NULL DEFAULT 0,
-    release_date TEXT,
-    rights_confirmed INTEGER NOT NULL DEFAULT 0,
-    terms_accepted INTEGER NOT NULL DEFAULT 0,
-    terms_version TEXT,
-    terms_accepted_at INTEGER,
-    status TEXT NOT NULL DEFAULT 'draft',
-    admin_note TEXT,
-    reviewed_at INTEGER,
-    reviewed_by TEXT,
-    published_track_id TEXT,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    submitted_at INTEGER,
-    FOREIGN KEY (artist_username) REFERENCES artist_profiles(username)
-  );
-  CREATE INDEX IF NOT EXISTS idx_submissions_artist ON submissions(artist_username, created_at);
-  CREATE INDEX IF NOT EXISTS idx_submissions_status ON submissions(status, submitted_at);
-
-  CREATE TABLE IF NOT EXISTS submission_credits (
-    id TEXT PRIMARY KEY,
-    submission_id TEXT NOT NULL,
-    artist_username TEXT,
-    external_name TEXT,
-    role TEXT NOT NULL,
-    is_primary INTEGER NOT NULL DEFAULT 0,
-    position INTEGER NOT NULL DEFAULT 0
-  );
-  CREATE INDEX IF NOT EXISTS idx_submission_credits_submission ON submission_credits(submission_id);
-
-  CREATE TABLE IF NOT EXISTS submission_events (
-    id TEXT PRIMARY KEY,
-    submission_id TEXT NOT NULL,
-    actor_username TEXT NOT NULL,
-    action TEXT NOT NULL,
-    note TEXT,
-    created_at INTEGER NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS idx_submission_events_submission ON submission_events(submission_id, created_at);
-
-  CREATE TABLE IF NOT EXISTS track_credits (
-    id TEXT PRIMARY KEY,
-    track_id TEXT NOT NULL,
-    artist_username TEXT,
-    external_name TEXT,
-    role TEXT NOT NULL,
-    is_primary INTEGER NOT NULL DEFAULT 0,
-    position INTEGER NOT NULL DEFAULT 0
-  );
-  CREATE INDEX IF NOT EXISTS idx_track_credits_track ON track_credits(track_id);
-`);
-
-// Migration: a track's cover/video/genre data, and the submission it was
-// published from. All nullable/defaulted so pre-Phase-6 tracks (none of
-// which have any of this data) keep working exactly as before.
-try { db.exec("ALTER TABLE tracks ADD COLUMN cover_filename TEXT"); } catch (e) { /* already present */ }
-try { db.exec("ALTER TABLE tracks ADD COLUMN video_filename TEXT"); } catch (e) { /* already present */ }
-try { db.exec("ALTER TABLE tracks ADD COLUMN genres TEXT NOT NULL DEFAULT '[]'"); } catch (e) { /* already present */ }
-try { db.exec("ALTER TABLE tracks ADD COLUMN submission_id TEXT"); } catch (e) { /* already present */ }
-
-// --- Admin platform (Phase 7) ---
-// Real account-restriction state, checked by requireAuth on every
-// request -- never a client-side flag. Never applied to admins (the
-// restrict endpoint refuses that target).
-try { db.exec("ALTER TABLE users ADD COLUMN is_restricted INTEGER NOT NULL DEFAULT 0"); } catch (e) { /* already present */ }
-try { db.exec("ALTER TABLE users ADD COLUMN restricted_at INTEGER"); } catch (e) { /* already present */ }
-try { db.exec("ALTER TABLE users ADD COLUMN restricted_reason TEXT"); } catch (e) { /* already present */ }
-try { db.exec("ALTER TABLE users ADD COLUMN restricted_by TEXT"); } catch (e) { /* already present */ }
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS admin_audit_log (
-    id TEXT PRIMARY KEY,
-    actor_username TEXT NOT NULL,
-    action TEXT NOT NULL,
-    target_type TEXT NOT NULL,
-    target_id TEXT,
-    metadata TEXT,
-    created_at INTEGER NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS idx_audit_created ON admin_audit_log(created_at);
-
-  CREATE TABLE IF NOT EXISTS reports (
-    id TEXT PRIMARY KEY,
-    reporter_username TEXT NOT NULL,
-    target_type TEXT NOT NULL,
-    target_id TEXT NOT NULL,
-    reason TEXT NOT NULL,
-    note TEXT,
-    status TEXT NOT NULL DEFAULT 'open',
-    created_at INTEGER NOT NULL,
-    resolved_at INTEGER,
-    resolved_by TEXT,
-    resolution_note TEXT
-  );
-  CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status, created_at);
-
-  CREATE TABLE IF NOT EXISTS platform_settings (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    updated_at INTEGER,
-    updated_by TEXT
-  );
-`);
-
-// --- Phase 8: Social, Discovery & Personalized Music Experience ---
-
-// Playlists — owned by a user, real tracks only.
-db.exec(`
-  CREATE TABLE IF NOT EXISTS playlists (
-    id TEXT PRIMARY KEY,
-    owner_username TEXT NOT NULL,
-    title TEXT NOT NULL,
-    description TEXT NOT NULL DEFAULT '',
-    cover_filename TEXT,
-    is_public INTEGER NOT NULL DEFAULT 1,
-    track_count INTEGER NOT NULL DEFAULT 0,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    FOREIGN KEY (owner_username) REFERENCES users(username)
-  );
-  CREATE INDEX IF NOT EXISTS idx_playlists_owner ON playlists(owner_username, created_at);
-
-  CREATE TABLE IF NOT EXISTS playlist_tracks (
-    id TEXT PRIMARY KEY,
-    playlist_id TEXT NOT NULL,
-    track_id TEXT NOT NULL,
-    added_by TEXT NOT NULL,
-    position INTEGER NOT NULL DEFAULT 0,
-    added_at INTEGER NOT NULL,
-    FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
-    FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
-  );
-  CREATE INDEX IF NOT EXISTS idx_playlist_tracks_playlist ON playlist_tracks(playlist_id, position);
-  CREATE INDEX IF NOT EXISTS idx_playlist_tracks_track ON playlist_tracks(track_id);
-`);
-
-// Notifications — real events, opt-in only where appropriate.
-try {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS notifications (
-      id TEXT PRIMARY KEY,
-      username TEXT NOT NULL,
-      type TEXT NOT NULL,
-      actor_username TEXT,
-      target_type TEXT,
-      target_id TEXT,
-      title TEXT NOT NULL,
-      body TEXT NOT NULL DEFAULT '',
-      read INTEGER NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(username, read, created_at);
-  `);
-} catch (e) { /* already present */ }
-
-// Activity events — lightweight, purposeful events for analytics, discovery, personalization.
-try {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS activity_events (
-      id TEXT PRIMARY KEY,
-      username TEXT,
-      event_type TEXT NOT NULL,
-      target_type TEXT,
-      target_id TEXT,
-      metadata TEXT,
-      created_at INTEGER NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_activity_type ON activity_events(event_type, created_at);
-    CREATE INDEX IF NOT EXISTS idx_activity_user ON activity_events(username, created_at);
-    CREATE INDEX IF NOT EXISTS idx_activity_target ON activity_events(target_type, target_id);
-  `);
-} catch (e) { /* already present */ }
-
-// Search history for authenticated users.
-try {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS search_history (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT NOT NULL,
-      query TEXT NOT NULL,
-      created_at INTEGER NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_search_history_user ON search_history(username, created_at);
-  `);
-} catch (e) { /* already present */ }
-
-try { db.exec("ALTER TABLE users ADD COLUMN is_artist INTEGER NOT NULL DEFAULT 0"); } catch (e) { /* already present */ }
-try { db.exec("ALTER TABLE users ADD COLUMN phone_verified INTEGER NOT NULL DEFAULT 0"); } catch (e) { /* already present */ }
-
-// --- Auth upgrade: Passwordless OTP, Email verification, Phone, Apple ---
-try { db.exec("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0"); } catch (e) { /* already present */ }
-try { db.exec("ALTER TABLE users ADD COLUMN phone TEXT"); } catch (e) { /* already present */ }
-try { db.exec("ALTER TABLE users ADD COLUMN phone_verified INTEGER NOT NULL DEFAULT 0"); } catch (e) { /* already present */ }
-try { db.exec("ALTER TABLE users ADD COLUMN apple_id TEXT"); } catch (e) { /* already present */ }
-try { db.exec("ALTER TABLE users ADD COLUMN auth_provider TEXT NOT NULL DEFAULT 'email'"); } catch (e) { /* already present */ }
-db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_apple_id ON users(apple_id) WHERE apple_id IS NOT NULL");
-db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone ON users(phone) WHERE phone IS NOT NULL");
-
-// OTP tokens — email and phone, one-time use with expiry.
-db.exec(`
-  CREATE TABLE IF NOT EXISTS otp_tokens (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    target TEXT NOT NULL,
-    target_type TEXT NOT NULL,
-    code TEXT NOT NULL,
-    expires_at INTEGER NOT NULL,
-    used INTEGER NOT NULL DEFAULT 0,
-    attempts INTEGER NOT NULL DEFAULT 0,
-    created_at INTEGER NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS idx_otp_target ON otp_tokens(target, target_type, used);
-`);
+/**
+ * 4ANG Database Layer — Supabase PostgreSQL
+ *
+ * Replaces the legacy SQLite layer. Exports the same shape functions
+ * and utilities used by route files, now backed by Supabase.
+ *
+ * IMPORTANT: The Supabase tables now include `username` columns alongside
+ * UUID `user_id`/`id` columns (added in migration 011) so shape functions
+ * can use the same field names.
+ */
+import { supabaseAdmin } from "./supabase.js";
 
 function randomId() {
-  return (globalThis.crypto && globalThis.crypto.randomUUID) ? globalThis.crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36);
+  return (globalThis.crypto && globalThis.crypto.randomUUID)
+    ? globalThis.crypto.randomUUID()
+    : Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
-// Every privileged Admin action funnels through here -- a single,
-// append-only, actor+action+target trail (Part 53). Nothing here is ever
-// exposed to non-admins, and rows are never updated or deleted, only
-// inserted, so the log can't quietly be edited after the fact from
-// within the app itself.
-export function recordAdminAudit(actorUsername, action, targetType, targetId, metadata) {
-  db.prepare(`INSERT INTO admin_audit_log (id, actor_username, action, target_type, target_id, metadata, created_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?)`)
-    .run(randomId(), actorUsername, action, targetType, targetId || null, metadata ? JSON.stringify(metadata) : null, Date.now());
+// ═══════════════════════════════════════════════════════════════
+// URL Resolution — Supabase Storage URLs
+// ═══════════════════════════════════════════════════════════════
+
+function publicUrl(bucket, path) {
+  if (!path) return null;
+  if (path.startsWith("http")) return path; // already a full URL
+  const { data } = supabaseAdmin.storage.from(bucket).getPublicUrl(path);
+  return data?.publicUrl || null;
 }
 
-/**
- * Resolve a file path to a URL.
- * When Supabase is configured, returns local /api/ paths (served by Express static).
- * When Supabase Storage is used, the storage.js helper returns Supabase URLs.
- * This function keeps the current local-file approach working.
- */
+async function signedUrl(bucket, path) {
+  if (!path) return null;
+  if (path.startsWith("http")) return path;
+  const { data, error } = await supabaseAdmin.storage.from(bucket).createSignedUrl(path, 365 * 24 * 60 * 60);
+  if (error) return null;
+  return data?.signedUrl || null;
+}
+
 function resolveUrl(bucket, filePath) {
   if (!filePath) return null;
-  // Currently all files are served locally via Express static routes.
-  // When Supabase is configured, storage.js uploadFile() will return
-  // Supabase URLs instead of local paths, and the shape functions
-  // should use getFileUrl() to resolve them.
+  if (filePath.startsWith("http")) return filePath;
+  // Public buckets: artwork, avatars
+  if (bucket === "artwork" || bucket === "avatars") {
+    const { data } = supabaseAdmin.storage.from(bucket).getPublicUrl(filePath);
+    return data?.publicUrl || `/api/${bucket}/${filePath}`;
+  }
+  // Private buckets: audio, videos — use API proxy
   return `/api/${bucket}/${filePath}`;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Settings
+// ═══════════════════════════════════════════════════════════════
+
+export async function getSetting(key, fallback = null) {
+  const { data, error } = await supabaseAdmin
+    .from("platform_settings").select("value").eq("key", key).single();
+  if (error || !data) return fallback;
+  try { return typeof data.value === "string" ? JSON.parse(data.value) : data.value; } catch { return fallback; }
+}
+
+export async function setSetting(key, value, actorUsername) {
+  const now = new Date().toISOString();
+  const { error } = await supabaseAdmin
+    .from("platform_settings")
+    .upsert({
+      key,
+      value: typeof value === "string" ? value : JSON.stringify(value),
+      updated_at: now,
+      updated_by_username: actorUsername || null,
+    }, { onConflict: "key" });
+  if (error) console.error("[db] setSetting:", error.message);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Account Restrictions
+// ═══════════════════════════════════════════════════════════════
+
+export async function isAccountRestricted(username) {
+  const { data } = await supabaseAdmin
+    .from("profiles").select("is_restricted").eq("username", username).single();
+  return !!(data && data.is_restricted);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Badge Status
+// ═══════════════════════════════════════════════════════════════
+
+export function badgeStatusFor(verificationStatus) {
+  if (!verificationStatus) return null;
+  return verificationStatus === "verified" ? "verified" : "independent";
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Shape Functions — format DB rows for API responses
+// ═══════════════════════════════════════════════════════════════
+
+export function shapePublicUserSummary(row) {
+  return {
+    username: row.username,
+    displayName: row.display_name,
+    email: row.email || null,
+    isAdmin: row.role === "admin",
+    isArtist: row.role === "artist",
+    artistBadge: null, // caller should resolve separately
+    isRestricted: !!row.is_restricted,
+    restrictedReason: row.restricted_reason || null,
+    restrictedAt: row.restricted_at || null,
+    createdAt: typeof row.created_at === "number" ? row.created_at : new Date(row.created_at).getTime(),
+  };
 }
 
 export function shapeAuditEntry(row) {
   return {
     id: row.id,
-    actorUsername: row.actor_username,
+    actorUsername: row.actor_username || row.actor_username,
     action: row.action,
     targetType: row.target_type,
     targetId: row.target_id,
-    metadata: row.metadata ? JSON.parse(row.metadata) : null,
-    createdAt: row.created_at,
+    metadata: typeof row.metadata === "string" ? (() => { try { return JSON.parse(row.metadata); } catch { return null; } })() : row.metadata,
+    createdAt: typeof row.created_at === "number" ? row.created_at : new Date(row.created_at).getTime(),
   };
 }
 
@@ -393,53 +130,11 @@ export function shapeReport(row) {
     reason: row.reason,
     note: row.note || null,
     status: row.status,
-    createdAt: row.created_at,
+    createdAt: typeof row.created_at === "number" ? row.created_at : new Date(row.created_at).getTime(),
     resolvedAt: row.resolved_at || null,
-    resolvedBy: row.resolved_by || null,
+    resolvedBy: row.resolved_by_username || null,
     resolutionNote: row.resolution_note || null,
   };
-}
-
-export function getSetting(key, fallback = null) {
-  const row = db.prepare("SELECT value FROM platform_settings WHERE key = ?").get(key);
-  if (!row) return fallback;
-  try { return JSON.parse(row.value); } catch (e) { return fallback; }
-}
-
-export function setSetting(key, value, actorUsername) {
-  const now = Date.now();
-  db.prepare(`INSERT INTO platform_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)
-              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`)
-    .run(key, JSON.stringify(value), now, actorUsername || null);
-}
-
-export function isAccountRestricted(username) {
-  const row = db.prepare("SELECT is_restricted FROM users WHERE username = ?").get(username);
-  return !!(row && row.is_restricted);
-}
-
-export function shapePublicUserSummary(row) {
-  const artist = db.prepare("SELECT verification_status FROM artist_profiles WHERE username = ?").get(row.username);
-  return {
-    username: row.username,
-    displayName: row.display_name,
-    email: row.email || null,
-    isAdmin: !!row.is_admin,
-    isArtist: !!artist,
-    artistBadge: artist ? badgeStatusFor(artist.verification_status) : null,
-    isRestricted: !!row.is_restricted,
-    restrictedReason: row.restricted_reason || null,
-    restrictedAt: row.restricted_at || null,
-    createdAt: row.created_at,
-  };
-}
-
-// A track's real "who uploaded this, and are they a real artist" — a
-// guaranteed-correct join (uploader_username is a real FK), never a
-// text-matched guess against the free-text composer field.
-export function badgeStatusFor(verificationStatus) {
-  if (!verificationStatus) return null;
-  return verificationStatus === "verified" ? "verified" : "independent";
 }
 
 export function shapeArtistProfile(row, extra = {}) {
@@ -448,49 +143,69 @@ export function shapeArtistProfile(row, extra = {}) {
     username: row.username,
     artistName: row.artist_name,
     bio: row.bio || "",
-    avatarUrl: row.avatar_filename ? resolveUrl("avatars", row.avatar_filename) : null,
-    coverUrl: row.cover_filename ? resolveUrl("artwork", row.cover_filename) : null,
-    genres: JSON.parse(row.genres || "[]"),
-    links: JSON.parse(row.links || "[]"),
+    avatarUrl: row.avatar_url || (row.avatar_filename ? resolveUrl("avatars", row.avatar_filename) : null),
+    coverUrl: row.cover_url || (row.cover_filename ? resolveUrl("artwork", row.cover_filename) : null),
+    genres: typeof row.genres === "string" ? JSON.parse(row.genres || "[]") : (row.genres || []),
+    links: typeof row.links === "string" ? JSON.parse(row.links || "[]") : (row.links || []),
     verificationStatus: row.verification_status,
     verificationNote: row.verification_note || null,
     badge: badgeStatusFor(row.verification_status),
-    createdAt: row.created_at,
+    createdAt: typeof row.created_at === "number" ? row.created_at : new Date(row.created_at).getTime(),
     ...extra,
   };
 }
 
-// Structured credits for a published track — a real join against
-// artist_profiles for every registered credit (never a name string typed
-// in at review time), so avatars/badges/links on a "Producer" credit are
-// exactly as reliable as the uploader badge already is.
 export function shapeTrackCredits(trackId) {
-  const rows = db.prepare("SELECT * FROM track_credits WHERE track_id = ? ORDER BY is_primary DESC, position ASC").all(trackId);
-  return rows.map((c) => {
-    const artist = c.artist_username ? db.prepare("SELECT artist_name, avatar_filename, verification_status FROM artist_profiles WHERE username = ?").get(c.artist_username) : null;
+  // Must be called asynchronously; returns a promise
+  return _shapeTrackCreditsAsync(trackId);
+}
+
+async function _shapeTrackCreditsAsync(trackId) {
+  const { data: rows } = await supabaseAdmin
+    .from("track_credits").select("*").eq("track_id", trackId).order("is_primary", { ascending: false }).order("position");
+  if (!rows || rows.length === 0) return [];
+  return Promise.all(rows.map(async (c) => {
+    let artist = null;
+    if (c.artist_username || c.user_id) {
+      const filter = c.user_id ? { user_id: c.user_id } : { username: c.artist_username };
+      const { data } = await supabaseAdmin.from("artist_profiles").select("artist_name, avatar_url, verification_status").eq(
+        Object.keys(filter)[0], Object.values(filter)[0]
+      ).maybeSingle();
+      artist = data;
+    }
     return {
       artistUsername: c.artist_username || null,
       artistName: artist ? artist.artist_name : (c.external_name || ""),
-      avatarUrl: artist && artist.avatar_filename ? resolveUrl("avatars", artist.avatar_filename) : null,
+      avatarUrl: artist?.avatar_url || null,
       badge: artist ? badgeStatusFor(artist.verification_status) : null,
-      isExternal: !c.artist_username,
+      isExternal: !c.artist_username && !c.user_id,
       role: c.role,
       isPrimary: !!c.is_primary,
     };
-  });
+  }));
 }
 
-export function shapeTrack(row) {
+export async function shapeTrack(row) {
   if (!row) return null;
-  const likedBy = db.prepare("SELECT username FROM likes WHERE track_id = ?").all(row.id).map((r) => r.username);
-  const savedBy = db.prepare("SELECT username FROM saves WHERE track_id = ?").all(row.id).map((r) => r.username);
-  const comments = db.prepare("SELECT * FROM comments WHERE track_id = ? ORDER BY created_at ASC").all(row.id).map((c) => ({
-    id: c.id, username: c.username, displayName: c.display_name, text: c.text, createdAt: c.created_at
+  // Get likes, savedBy, comments, uploader badge, credits in parallel
+  const [likesResult, savesResult, commentsResult, uploaderArtist, credits] = await Promise.all([
+    supabaseAdmin.from("track_likes").select("username").eq("track_id", row.id),
+    supabaseAdmin.from("track_saves").select("username").eq("track_id", row.id),
+    supabaseAdmin.from("track_comments").select("*").eq("track_id", row.id).order("created_at"),
+    row.uploader_username
+      ? supabaseAdmin.from("artist_profiles").select("verification_status").eq("username", row.uploader_username).maybeSingle()
+      : Promise.resolve({ data: null }),
+    _shapeTrackCreditsAsync(row.id),
+  ]);
+
+  const likedBy = (likesResult.data || []).map(r => r.username);
+  const savedBy = (savesResult.data || []).map(r => r.username);
+  const comments = (commentsResult.data || []).map(c => ({
+    id: c.id, username: c.username, displayName: c.display_name || "", text: c.text, createdAt: typeof c.created_at === "string" ? new Date(c.created_at).getTime() : c.created_at,
   }));
-  const uploaderArtist = db.prepare("SELECT verification_status FROM artist_profiles WHERE username = ?").get(row.uploader_username);
-  const credits = shapeTrackCredits(row.id);
-  const primary = credits.find((c) => c.isPrimary);
-  const featured = credits.filter((c) => c.role === "featured");
+  const primary = credits.find(c => c.isPrimary);
+  const featured = credits.filter(c => c.role === "featured");
+
   return {
     id: row.id,
     title: row.title,
@@ -498,28 +213,26 @@ export function shapeTrack(row) {
     description: row.description || "",
     releaseDate: row.release_date || "",
     lyrics: row.lyrics || "",
-    timedLyrics: row.timed_lyrics ? (() => { try { return JSON.parse(row.timed_lyrics); } catch (e) { return null; } })() : null,
-    duration: row.duration || null,
-    genres: JSON.parse(row.genres || "[]"),
+    timedLyrics: row.timed_lyrics || null,
+    duration: row.audio_duration || row.duration || null,
+    genres: typeof row.genres === "string" ? JSON.parse(row.genres || "[]") : (row.genres || []),
     uploaderUsername: row.uploader_username,
-    uploaderDisplayName: row.uploader_display_name,
-    uploaderBadge: badgeStatusFor(uploaderArtist && uploaderArtist.verification_status),
+    uploaderDisplayName: row.uploader_display_name || row.uploader_username || "",
+    uploaderBadge: badgeStatusFor(uploaderArtist?.data?.verification_status),
     status: row.status,
-    shareCount: row.share_count,
+    shareCount: row.share_count || 0,
     playCount: row.play_count || 0,
-    createdAt: row.created_at,
+    createdAt: typeof row.created_at === "number" ? row.created_at : new Date(row.created_at).getTime(),
     likedBy,
     savedBy,
     comments,
-    audioUrl: "/api/tracks/" + row.id + "/audio",
-    coverUrl: row.cover_filename ? resolveUrl("artwork", row.cover_filename) : null,
-    videoUrl: row.video_filename ? "/api/tracks/" + row.id + "/video" : null,
+    audioUrl: `/api/tracks/${row.id}/audio`,
+    coverUrl: row.cover_url || (row.cover_filename ? resolveUrl("artwork", row.cover_filename) : null),
+    videoUrl: row.video_path || row.video_filename ? `/api/tracks/${row.id}/video` : null,
     credits,
-    // Real-signal display helpers, always derived from the structured
-    // credits above — never a second, independently-typed name field.
     primaryArtistName: primary ? primary.artistName : "",
     primaryArtistUsername: primary ? primary.artistUsername : null,
-    featuredArtistNames: featured.map((f) => f.artistName),
+    featuredArtistNames: featured.map(f => f.artistName),
     isrc: row.isrc || null,
     rightsHolder: row.rights_holder || null,
     rightsYear: row.rights_year || null,
@@ -529,39 +242,57 @@ export function shapeTrack(row) {
   };
 }
 
-// --- Submissions (Phase 6) ---
+// ═══════════════════════════════════════════════════════════════
+// Submissions
+// ═══════════════════════════════════════════════════════════════
 
-export function shapeSubmissionCredits(submissionId) {
-  const rows = db.prepare("SELECT * FROM submission_credits WHERE submission_id = ? ORDER BY is_primary DESC, position ASC").all(submissionId);
-  return rows.map((c) => {
-    const artist = c.artist_username ? db.prepare("SELECT artist_name, avatar_filename, verification_status FROM artist_profiles WHERE username = ?").get(c.artist_username) : null;
+export async function shapeSubmissionCredits(submissionId) {
+  const { data: rows } = await supabaseAdmin
+    .from("submission_credits").select("*").eq("submission_id", submissionId).order("is_primary", { ascending: false }).order("position");
+  if (!rows || rows.length === 0) return [];
+  return Promise.all(rows.map(async (c) => {
+    let artist = null;
+    if (c.artist_username || c.user_id) {
+      const filter = c.user_id ? { user_id: c.user_id } : { username: c.artist_username };
+      const { data } = await supabaseAdmin.from("artist_profiles").select("artist_name, avatar_url, verification_status").eq(
+        Object.keys(filter)[0], Object.values(filter)[0]
+      ).maybeSingle();
+      artist = data;
+    }
     return {
       id: c.id,
       artistUsername: c.artist_username || null,
       artistName: artist ? artist.artist_name : (c.external_name || ""),
-      avatarUrl: artist && artist.avatar_filename ? resolveUrl("avatars", artist.avatar_filename) : null,
+      avatarUrl: artist?.avatar_url || null,
       badge: artist ? badgeStatusFor(artist.verification_status) : null,
-      isExternal: !c.artist_username,
+      isExternal: !c.artist_username && !c.user_id,
       role: c.role,
       isPrimary: !!c.is_primary,
     };
-  });
+  }));
 }
 
-export function shapeSubmissionEvents(submissionId) {
-  const rows = db.prepare("SELECT * FROM submission_events WHERE submission_id = ? ORDER BY created_at ASC").all(submissionId);
-  return rows.map((e) => ({
+export async function shapeSubmissionEvents(submissionId) {
+  const { data: rows } = await supabaseAdmin
+    .from("submission_events").select("*").eq("submission_id", submissionId).order("created_at");
+  if (!rows) return [];
+  return rows.map(e => ({
     id: e.id,
     actorUsername: e.actor_username,
     action: e.action,
     note: e.note || null,
-    createdAt: e.created_at,
+    createdAt: typeof e.created_at === "string" ? new Date(e.created_at).getTime() : e.created_at,
   }));
 }
 
-export function shapeSubmission(row, { includeEvents = false } = {}) {
+export async function shapeSubmission(row, { includeEvents = false } = {}) {
   if (!row) return null;
-  const submitterArtist = db.prepare("SELECT artist_name, avatar_filename, verification_status FROM artist_profiles WHERE username = ?").get(row.artist_username);
+  let submitterArtist = null;
+  if (row.artist_username) {
+    const { data } = await supabaseAdmin
+      .from("artist_profiles").select("artist_name, avatar_url, verification_status").eq("username", row.artist_username).maybeSingle();
+    submitterArtist = data;
+  }
   const out = {
     id: row.id,
     artistUsername: row.artist_username,
@@ -570,11 +301,11 @@ export function shapeSubmission(row, { includeEvents = false } = {}) {
     title: row.title,
     releaseType: row.release_type,
     audioOriginalName: row.audio_original_name || null,
-    hasAudio: !!row.audio_filename,
-    coverUrl: row.cover_filename ? resolveUrl("artwork", row.cover_filename) : null,
-    hasVideo: !!row.video_filename,
+    hasAudio: !!(row.audio_path || row.audio_filename),
+    coverUrl: row.cover_url || (row.cover_filename ? resolveUrl("artwork", row.cover_filename) : null),
+    hasVideo: !!(row.video_path || row.video_filename),
     lyrics: row.lyrics || "",
-    genres: JSON.parse(row.genres || "[]"),
+    genres: typeof row.genres === "string" ? JSON.parse(row.genres || "[]") : (row.genres || []),
     language: row.language || "",
     isExplicit: !!row.is_explicit,
     releaseDate: row.release_date || "",
@@ -585,48 +316,67 @@ export function shapeSubmission(row, { includeEvents = false } = {}) {
     status: row.status,
     adminNote: row.admin_note || null,
     publishedTrackId: row.published_track_id || null,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    submittedAt: row.submitted_at || null,
+    createdAt: typeof row.created_at === "number" ? row.created_at : new Date(row.created_at).getTime(),
+    updatedAt: typeof row.updated_at === "number" ? row.updated_at : new Date(row.updated_at).getTime(),
+    submittedAt: row.submitted_at ? (typeof row.submitted_at === "number" ? row.submitted_at : new Date(row.submitted_at).getTime()) : null,
     reviewedAt: row.reviewed_at || null,
     reviewedBy: row.reviewed_by || null,
-    credits: shapeSubmissionCredits(row.id),
+    credits: await shapeSubmissionCredits(row.id),
   };
-  if (includeEvents) out.events = shapeSubmissionEvents(row.id);
+  if (includeEvents) out.events = await shapeSubmissionEvents(row.id);
   return out;
 }
 
-// --- Phase 8 helpers ---
+// ═══════════════════════════════════════════════════════════════
+// Playlists
+// ═══════════════════════════════════════════════════════════════
 
-export function shapePlaylist(row) {
+export async function shapePlaylist(row) {
   if (!row) return null;
-  const owner = db.prepare("SELECT display_name FROM users WHERE username = ?").get(row.owner_username);
+  let ownerDisplayName = row.owner_username;
+  if (row.owner_username) {
+    const { data } = await supabaseAdmin.from("profiles").select("display_name").eq("username", row.owner_username).maybeSingle();
+    if (data) ownerDisplayName = data.display_name;
+  }
   return {
     id: row.id,
     ownerUsername: row.owner_username,
-    ownerDisplayName: owner ? owner.display_name : row.owner_username,
+    ownerDisplayName,
     title: row.title,
     description: row.description || "",
-    coverUrl: row.cover_filename ? resolveUrl("artwork", row.cover_filename) : null,
-    isPublic: !!row.is_public,
+    coverUrl: row.cover_url || (row.cover_filename ? resolveUrl("artwork", row.cover_filename) : null),
+    isPublic: row.is_public ?? row.is_public ?? true,
     trackCount: row.track_count || 0,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: typeof row.created_at === "number" ? row.created_at : new Date(row.created_at).getTime(),
+    updatedAt: typeof row.updated_at === "number" ? row.updated_at : new Date(row.updated_at).getTime(),
   };
 }
 
-export function shapePlaylistDetail(row, { includeTracks = false, viewerUsername = null } = {}) {
+export async function shapePlaylistDetail(row, { includeTracks = false } = {}) {
   if (!row) return null;
-  const base = shapePlaylist(row);
+  const base = await shapePlaylist(row);
   if (!includeTracks) return base;
-  const trackRows = db.prepare(
-    "SELECT t.*, pt.position, pt.added_at FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id WHERE pt.playlist_id = ? ORDER BY pt.position ASC"
-  ).all(row.id);
-  return {
-    ...base,
-    tracks: trackRows.filter((t) => t.status === "approved").map((t) => ({ ...shapeTrack(t), addedAt: t.added_at })),
-  };
+
+  const { data: trackRows } = await supabaseAdmin
+    .from("playlist_tracks").select("*, tracks(*)").eq("playlist_id", row.id).order("position");
+  if (!trackRows) return { ...base, tracks: [] };
+
+  const tracks = [];
+  for (const pt of trackRows) {
+    if (pt.tracks && pt.tracks.status === "approved") {
+      const shaped = await shapeTrack(pt.tracks);
+      if (shaped) {
+        shaped.addedAt = typeof pt.added_at === "string" ? new Date(pt.added_at).getTime() : pt.added_at;
+        tracks.push(shaped);
+      }
+    }
+  }
+  return { ...base, tracks };
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Notifications
+// ═══════════════════════════════════════════════════════════════
 
 export function shapeNotification(row) {
   if (!row) return null;
@@ -638,249 +388,64 @@ export function shapeNotification(row) {
     targetId: row.target_id || null,
     title: row.title,
     body: row.body || "",
-    read: !!row.read,
-    createdAt: row.created_at,
+    read: !!row.is_read,
+    createdAt: typeof row.created_at === "string" ? new Date(row.created_at).getTime() : (typeof row.created_at === "number" ? row.created_at : 0),
   };
 }
 
-// Real notification creation — only called from server-side code.
-export function createNotification(username, type, title, body, { actorUsername = null, targetType = null, targetId = null } = {}) {
-  db.prepare(
-    "INSERT INTO notifications (id, username, type, actor_username, target_type, target_id, title, body, read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)"
-  ).run(randomId(), username, type, actorUsername, targetType, targetId, title, body || "", Date.now());
+export async function createNotification(username, type, title, body, { actorUsername = null, targetType = null, targetId = null } = {}) {
+  const { error } = await supabaseAdmin.from("notifications").insert({
+    id: randomId(),
+    username,
+    type,
+    actor_username: actorUsername,
+    target_type: targetType,
+    target_id: targetId,
+    title,
+    body: body || "",
+    is_read: false,
+    created_at: new Date().toISOString(),
+  });
+  if (error) console.error("[db] createNotification:", error.message);
 }
 
-// Record an activity event — lightweight, purposeful.
-export function recordActivity(username, eventType, targetType, targetId, metadata) {
-  db.prepare(
-    "INSERT INTO activity_events (id, username, event_type, target_type, target_id, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-  ).run(randomId(), username || null, eventType, targetType || null, targetId || null, metadata ? JSON.stringify(metadata) : null, Date.now());
+// ═══════════════════════════════════════════════════════════════
+// Activity Events
+// ═══════════════════════════════════════════════════════════════
+
+export async function recordActivity(username, eventType, targetType, targetId, metadata) {
+  const { error } = await supabaseAdmin.from("activity_events").insert({
+    id: randomId(),
+    username: username || null,
+    event_type: eventType,
+    target_type: targetType || null,
+    target_id: targetId || null,
+    metadata: metadata || null,
+    created_at: new Date().toISOString(),
+  });
+  if (error) console.error("[db] recordActivity:", error.message);
 }
 
 // ═══════════════════════════════════════════════════════════════
-// PHASE 9 — Releases, Timed Lyrics, Rights, Artist Applications
+// Admin Audit Log
 // ═══════════════════════════════════════════════════════════════
 
-// --- Timed Lyrics & Rights columns on tracks ---
-try { db.exec("ALTER TABLE tracks ADD COLUMN timed_lyrics TEXT"); } catch (e) { /* already present */ }
-try { db.exec("ALTER TABLE tracks ADD COLUMN duration INTEGER"); } catch (e) { /* already present */ }
-try { db.exec("ALTER TABLE tracks ADD COLUMN isrc TEXT"); } catch (e) { /* already present */ }
-try { db.exec("ALTER TABLE tracks ADD COLUMN rights_holder TEXT"); } catch (e) { /* already present */ }
-try { db.exec("ALTER TABLE tracks ADD COLUMN rights_year TEXT"); } catch (e) { /* already present */ }
-try { db.exec("ALTER TABLE tracks ADD COLUMN rights_label TEXT"); } catch (e) { /* already present */ }
-try { db.exec("ALTER TABLE tracks ADD COLUMN rights_record_id TEXT"); } catch (e) { /* already present */ }
-try { db.exec("ALTER TABLE tracks ADD COLUMN rights_declared_at INTEGER"); } catch (e) { /* already present */ }
-
-// --- Releases: Single, EP, Album, Postcard ---
-db.exec(`
-  CREATE TABLE IF NOT EXISTS releases (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    slug TEXT,
-    type TEXT NOT NULL DEFAULT 'single',
-    cover_filename TEXT,
-    description TEXT NOT NULL DEFAULT '',
-    artist_message TEXT NOT NULL DEFAULT '',
-    release_date TEXT,
-    label TEXT,
-    copyright_text TEXT,
-    status TEXT NOT NULL DEFAULT 'draft',
-    rejection_reason TEXT,
-    reviewed_at INTEGER,
-    reviewed_by TEXT,
-    created_by TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS idx_releases_type ON releases(type, status);
-  CREATE INDEX IF NOT EXISTS idx_releases_creator ON releases(created_by, created_at);
-  CREATE INDEX IF NOT EXISTS idx_releases_status ON releases(status, updated_at);
-
-  CREATE TABLE IF NOT EXISTS release_tracks (
-    id TEXT PRIMARY KEY,
-    release_id TEXT NOT NULL,
-    track_id TEXT NOT NULL,
-    track_number INTEGER NOT NULL DEFAULT 1,
-    disc_number INTEGER NOT NULL DEFAULT 1,
-    created_at INTEGER NOT NULL,
-    FOREIGN KEY (release_id) REFERENCES releases(id) ON DELETE CASCADE,
-    FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
-  );
-  CREATE INDEX IF NOT EXISTS idx_release_tracks_release ON release_tracks(release_id, track_number);
-  CREATE INDEX IF NOT EXISTS idx_release_tracks_track ON release_tracks(track_id);
-`);
-
-// --- Artist Applications (become a 4ANG artist) ---
-db.exec(`
-  CREATE TABLE IF NOT EXISTS artist_applications (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    username TEXT NOT NULL,
-    artist_name TEXT NOT NULL,
-    full_name TEXT NOT NULL DEFAULT '',
-    email TEXT NOT NULL,
-    phone TEXT NOT NULL DEFAULT '',
-    bio TEXT NOT NULL DEFAULT '',
-    main_genre TEXT NOT NULL DEFAULT '',
-    country TEXT NOT NULL DEFAULT '',
-    social_links TEXT NOT NULL DEFAULT '[]',
-    status TEXT NOT NULL DEFAULT 'pending',
-    review_note TEXT,
-    submitted_at INTEGER NOT NULL,
-    reviewed_at INTEGER,
-    reviewed_by TEXT,
-    created_at INTEGER NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS idx_artist_apps_user ON artist_applications(user_id, status);
-  CREATE INDEX IF NOT EXISTS idx_artist_apps_status ON artist_applications(status, submitted_at);
-`);
-
-// --- Migration: user_id INTEGER → TEXT (supports Supabase UUID IDs) ---
-try {
-  const appInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='artist_applications'").get();
-  if (appInfo && appInfo.sql.includes('user_id INTEGER')) {
-    db.exec('PRAGMA foreign_keys = OFF');
-    db.exec('BEGIN');
-    db.exec(`CREATE TABLE artist_applications_new (
-      id TEXT PRIMARY KEY, user_id TEXT NOT NULL, username TEXT NOT NULL,
-      artist_name TEXT NOT NULL, full_name TEXT NOT NULL DEFAULT '',
-      email TEXT NOT NULL, phone TEXT NOT NULL DEFAULT '', bio TEXT NOT NULL DEFAULT '',
-      main_genre TEXT NOT NULL DEFAULT '', country TEXT NOT NULL DEFAULT '',
-      social_links TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'pending',
-      review_note TEXT, submitted_at INTEGER NOT NULL, reviewed_at INTEGER,
-      reviewed_by TEXT, created_at INTEGER NOT NULL)`);
-    db.exec(`INSERT INTO artist_applications_new
-      SELECT id, CAST(user_id AS TEXT), username, artist_name, full_name,
-        email, phone, bio, main_genre, country, social_links, status,
-        review_note, submitted_at, reviewed_at, reviewed_by, created_at
-      FROM artist_applications`);
-    db.exec('DROP TABLE artist_applications');
-    db.exec('ALTER TABLE artist_applications_new RENAME TO artist_applications');
-    db.exec('CREATE INDEX idx_artist_apps_user ON artist_applications(user_id, status)');
-    db.exec('CREATE INDEX idx_artist_apps_status ON artist_applications(status, submitted_at)');
-    db.exec('COMMIT');
-    db.exec('PRAGMA foreign_keys = ON');
-  }
-} catch (e) { /* migration already done or table doesn't exist */ }
-
-try {
-  const vAppInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='verified_artist_applications'").get();
-  if (vAppInfo && vAppInfo.sql.includes('user_id INTEGER')) {
-    db.exec('PRAGMA foreign_keys = OFF');
-    db.exec('BEGIN');
-    db.exec(`CREATE TABLE verified_artist_applications_new (
-      id TEXT PRIMARY KEY, user_id TEXT NOT NULL, username TEXT NOT NULL,
-      artist_name TEXT NOT NULL, email TEXT NOT NULL, phone TEXT NOT NULL DEFAULT '',
-      bio TEXT NOT NULL DEFAULT '', main_genre TEXT NOT NULL DEFAULT '',
-      social_links TEXT NOT NULL DEFAULT '[]', official_links TEXT NOT NULL DEFAULT '[]',
-      additional_info TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending',
-      review_note TEXT, submitted_at INTEGER NOT NULL, reviewed_at INTEGER,
-      reviewed_by TEXT, created_at INTEGER NOT NULL)`);
-    db.exec(`INSERT INTO verified_artist_applications_new
-      SELECT id, CAST(user_id AS TEXT), username, artist_name, email, phone, bio,
-        main_genre, social_links, official_links, additional_info, status,
-        review_note, submitted_at, reviewed_at, reviewed_by, created_at
-      FROM verified_artist_applications`);
-    db.exec('DROP TABLE verified_artist_applications');
-    db.exec('ALTER TABLE verified_artist_applications_new RENAME TO verified_artist_applications');
-    db.exec('CREATE INDEX idx_verified_apps_user ON verified_artist_applications(user_id, status)');
-    db.exec('CREATE INDEX idx_verified_apps_status ON verified_artist_applications(status, submitted_at)');
-    db.exec('COMMIT');
-    db.exec('PRAGMA foreign_keys = ON');
-  }
-} catch (e) { /* migration already done or table doesn't exist */ }
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS verified_artist_applications (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    username TEXT NOT NULL,
-    artist_name TEXT NOT NULL,
-    email TEXT NOT NULL,
-    phone TEXT NOT NULL DEFAULT '',
-    bio TEXT NOT NULL DEFAULT '',
-    main_genre TEXT NOT NULL DEFAULT '',
-    social_links TEXT NOT NULL DEFAULT '[]',
-    official_links TEXT NOT NULL DEFAULT '[]',
-    additional_info TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'pending',
-    review_note TEXT,
-    submitted_at INTEGER NOT NULL,
-    reviewed_at INTEGER,
-    reviewed_by TEXT,
-    created_at INTEGER NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS idx_verified_apps_user ON verified_artist_applications(user_id, status);
-  CREATE INDEX IF NOT EXISTS idx_verified_apps_status ON verified_artist_applications(status, submitted_at);
-`);
-
-// --- Email Notifications log ---
-db.exec(`
-  CREATE TABLE IF NOT EXISTS email_notifications (
-    id TEXT PRIMARY KEY,
-    user_id INTEGER,
-    recipient TEXT NOT NULL,
-    type TEXT NOT NULL,
-    subject TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'pending',
-    sent_at INTEGER,
-    error TEXT,
-    metadata TEXT,
-    created_at INTEGER NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS idx_email_notif_status ON email_notifications(status, created_at);
-`);
-
-// --- Listening Progress (Continue Listening) ---
-db.exec(`
-  CREATE TABLE IF NOT EXISTS listening_progress (
-    username TEXT NOT NULL,
-    track_id TEXT NOT NULL,
-    progress_seconds REAL DEFAULT 0,
-    duration_seconds REAL DEFAULT 0,
-    source_type TEXT DEFAULT 'track',
-    source_id TEXT,
-    updated_at INTEGER NOT NULL,
-    PRIMARY KEY (username, track_id)
-  );
-  CREATE INDEX IF NOT EXISTS idx_lp_user ON listening_progress(username, updated_at DESC);
-`);
-
-// ═══════════════════════════════════════════════════════════════
-// PHASE 9 — Shape helpers
-// ═══════════════════════════════════════════════════════════════
-
-export function shapeRelease(row, { includeTracks = false } = {}) {
-  if (!row) return null;
-  const out = {
-    id: row.id,
-    title: row.title,
-    slug: row.slug || null,
-    type: row.type,
-    coverUrl: row.cover_filename ? resolveUrl("artwork", row.cover_filename) : null,
-    description: row.description || "",
-    artistMessage: row.artist_message || "",
-    releaseDate: row.release_date || null,
-    label: row.label || null,
-    copyrightText: row.copyright_text || null,
-    status: row.status,
-    rejectionReason: row.rejection_reason || null,
-    reviewedAt: row.reviewed_at || null,
-    reviewedBy: row.reviewed_by || null,
-    createdBy: row.created_by,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-  if (includeTracks) {
-    const trackRows = db.prepare(
-      "SELECT t.*, rt.track_number, rt.disc_number FROM release_tracks rt JOIN tracks t ON t.id = rt.track_id WHERE rt.release_id = ? ORDER BY rt.disc_number ASC, rt.track_number ASC"
-    ).all(row.id);
-    out.tracks = trackRows.filter((t) => t.status === "approved").map((t) => ({ ...shapeTrack(t), trackNumber: t.track_number, discNumber: t.disc_number }));
-    out.trackCount = out.tracks.length;
-    out.totalDuration = out.tracks.reduce((sum, t) => sum + (t.duration || 0), 0);
-  }
-  return out;
+export async function recordAdminAudit(actorUsername, action, targetType, targetId, metadata) {
+  const { error } = await supabaseAdmin.from("admin_audit_log").insert({
+    id: randomId(),
+    actor_username: actorUsername,
+    action,
+    target_type: targetType,
+    target_id: targetId || null,
+    metadata: metadata ? (typeof metadata === "string" ? metadata : JSON.stringify(metadata)) : null,
+    created_at: new Date().toISOString(),
+  });
+  if (error) console.error("[db] recordAdminAudit:", error.message);
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Artist Applications
+// ═══════════════════════════════════════════════════════════════
 
 export function shapeArtistApplication(row) {
   if (!row) return null;
@@ -895,13 +460,13 @@ export function shapeArtistApplication(row) {
     bio: row.bio || "",
     mainGenre: row.main_genre || "",
     country: row.country || "",
-    socialLinks: JSON.parse(row.social_links || "[]"),
+    socialLinks: typeof row.social_links === "string" ? JSON.parse(row.social_links || "[]") : (row.social_links || []),
     status: row.status,
     reviewNote: row.review_note || null,
-    submittedAt: row.submitted_at,
+    submittedAt: typeof row.submitted_at === "string" ? new Date(row.submitted_at).getTime() : (row.submitted_at || null),
     reviewedAt: row.reviewed_at || null,
     reviewedBy: row.reviewed_by || null,
-    createdAt: row.created_at,
+    createdAt: typeof row.created_at === "string" ? new Date(row.created_at).getTime() : row.created_at,
   };
 }
 
@@ -916,37 +481,81 @@ export function shapeVerifiedArtistApplication(row) {
     phone: row.phone || null,
     bio: row.bio || "",
     mainGenre: row.main_genre || "",
-    socialLinks: JSON.parse(row.social_links || "[]"),
-    officialLinks: JSON.parse(row.official_links || "[]"),
+    socialLinks: typeof row.social_links === "string" ? JSON.parse(row.social_links || "[]") : (row.social_links || []),
+    officialLinks: typeof row.official_links === "string" ? JSON.parse(row.official_links || "[]") : (row.official_links || []),
     additionalInfo: row.additional_info || "",
     status: row.status,
     reviewNote: row.review_note || null,
-    submittedAt: row.submitted_at,
+    submittedAt: typeof row.submitted_at === "string" ? new Date(row.submitted_at).getTime() : (row.submitted_at || null),
     reviewedAt: row.reviewed_at || null,
     reviewedBy: row.reviewed_by || null,
-    createdAt: row.created_at,
+    createdAt: typeof row.created_at === "string" ? new Date(row.created_at).getTime() : row.created_at,
   };
 }
 
-// Generate unique 4ANG Rights Record ID: 4ANG-RGT-YYYY-XXXXXXXX
+// ═══════════════════════════════════════════════════════════════
+// Releases
+// ═══════════════════════════════════════════════════════════════
+
+export async function shapeRelease(row, { includeTracks = false } = {}) {
+  if (!row) return null;
+  const out = {
+    id: row.id,
+    title: row.title,
+    slug: row.slug || null,
+    type: row.type,
+    coverUrl: row.cover_url || (row.cover_filename ? resolveUrl("artwork", row.cover_filename) : null),
+    description: row.description || "",
+    artistMessage: row.artist_message || "",
+    releaseDate: row.release_date || null,
+    label: row.label || null,
+    copyrightText: row.copyright_text || null,
+    status: row.status,
+    rejectionReason: row.rejection_reason || null,
+    reviewedAt: row.reviewed_at || null,
+    reviewedBy: row.reviewed_by_username || null,
+    createdBy: row.created_by_username || row.created_by,
+    createdAt: typeof row.created_at === "number" ? row.created_at : new Date(row.created_at).getTime(),
+    updatedAt: typeof row.updated_at === "number" ? row.updated_at : new Date(row.updated_at).getTime(),
+  };
+  if (includeTracks) {
+    const { data: trackRows } = await supabaseAdmin
+      .from("release_tracks").select("*, tracks(*)").eq("release_id", row.id).order("disc_number").order("track_number");
+    if (trackRows) {
+      const tracks = [];
+      for (const rt of trackRows) {
+        if (rt.tracks && rt.tracks.status === "approved") {
+          const shaped = await shapeTrack(rt.tracks);
+          if (shaped) {
+            shaped.trackNumber = rt.track_number;
+            shaped.discNumber = rt.disc_number;
+            tracks.push(shaped);
+          }
+        }
+      }
+      out.tracks = tracks;
+      out.trackCount = tracks.length;
+      out.totalDuration = tracks.reduce((sum, t) => sum + (t.duration || 0), 0);
+    }
+  }
+  return out;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Utility
+// ═══════════════════════════════════════════════════════════════
+
 export function generateRightsRecordId() {
   const year = new Date().getFullYear();
-  const rand = randomId().replace(/-/g, '').slice(0, 8).toUpperCase();
+  const rand = randomId().replace(/-/g, "").slice(0, 8).toUpperCase();
   return `4ANG-RGT-${year}-${rand}`;
 }
 
-// ─── Onboarding ─────────────────────────────────────────
-try { db.exec("ALTER TABLE users ADD COLUMN onboarding_completed INTEGER NOT NULL DEFAULT 0"); } catch (e) { /* already present */ }
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS user_preferences (
-    user_id INTEGER PRIMARY KEY,
-    favorite_genres TEXT DEFAULT '[]',
-    favorite_artists TEXT DEFAULT '[]',
-    preferred_moods TEXT DEFAULT '[]',
-    onboarding_step INTEGER DEFAULT 0,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id)
-  );
-`);
+// ═══════════════════════════════════════════════════════════════
+// Re-export Supabase helpers for route files
+// ═══════════════════════════════════════════════════════════════
+export { supabaseAdmin } from "./supabase.js";
+export {
+  pgSelect, pgSelectOne, pgInsert, pgInsertMany, pgUpdate, pgUpsert,
+  pgDelete, pgCount, pgExists, pgInsertReturning, pgUpsertReturning,
+} from "./pg.js";

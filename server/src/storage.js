@@ -28,16 +28,19 @@ const LOCAL_DIRS = {
   videos: path.join(LOCAL_BASE, "videos"),
 };
 
-// Ensure local dirs exist
-for (const dir of Object.values(LOCAL_DIRS)) {
-  fs.mkdirSync(dir, { recursive: true });
-}
-
 // ── Supabase availability ─────────────────────────────────────
 const supabaseReady = () => {
   const url = process.env.SUPABASE_URL;
   return url && !url.includes("placeholder");
 };
+
+// Only create local dirs in dev mode (when Supabase is not configured)
+if (!supabaseReady()) {
+  console.warn("[storage] SUPABASE_URL not set — using local disk fallback (dev mode only)");
+  for (const dir of Object.values(LOCAL_DIRS)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+}
 
 // ── MIME → extension whitelists ────────────────────────────────
 const AUDIO_EXT = { "audio/mpeg": ".mp3", "audio/wav": ".wav", "audio/flac": ".flac", "audio/x-m4a": ".m4a", "audio/mp4": ".m4a" };
@@ -96,11 +99,8 @@ export async function uploadFile(bucket, userId, buffer, mimeType, originalName)
     return { path: filePath, url, publicUrl: bucket !== "audio" && bucket !== "videos" ? url : undefined };
   }
 
-  // ── Local fallback ──────────────────────────────────────────
-  const localDir = LOCAL_DIRS[bucket] || LOCAL_BASE;
-  const localPath = path.join(localDir, filename);
-  fs.writeFileSync(localPath, buffer);
-  return { path: filename, url: `/api/${bucket}/${filename}` };
+  // ── No Supabase configured — cannot store files ────────────
+  throw new Error(`Storage unavailable: SUPABASE_URL not configured. Cannot persist ${bucket} file.`);
 }
 
 /**
@@ -115,10 +115,8 @@ export async function deleteFile(bucket, filePath) {
     return;
   }
 
-  // Local fallback
-  const localDir = LOCAL_DIRS[bucket] || LOCAL_BASE;
-  const fullPath = path.join(localDir, filePath);
-  fs.unlink(fullPath, () => {});
+  // No Supabase — cannot delete
+  console.warn(`[storage] Cannot delete ${bucket}/${filePath}: SUPABASE_URL not configured`);
 }
 
 /**
@@ -139,8 +137,8 @@ export async function getFileUrl(bucket, filePath) {
     return data?.signedUrl || null;
   }
 
-  // Local fallback
-  return `/api/${bucket}/${filePath}`;
+  // No Supabase — cannot resolve URL
+  return null;
 }
 
 // ── Helpers ────────────────────────────────────────────────────

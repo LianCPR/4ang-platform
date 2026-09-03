@@ -1,9 +1,7 @@
-// Minimal in-memory fixed-window rate limiter — no extra dependency, and
-// this app runs as a single process (SQLite via node:sqlite is already
-// single-process by construction), so an in-memory window is real
-// protection here, not a false sense of one. Applied only to genuinely
-// sensitive endpoints (§56) — login, admin actions, submission writes —
-// never blanket-applied to reads.
+// Minimal in-memory fixed-window rate limiter — no extra dependency.
+// In-memory window is real protection for a single-process server.
+// Applied only to sensitive endpoints — login, admin actions, submission
+// writes — never blanket-applied to reads.
 
 const buckets = new Map();
 

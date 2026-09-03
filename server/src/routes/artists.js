@@ -1,12 +1,14 @@
+/**
+ * 4ANG Artists Routes — Supabase PostgreSQL only.
+ */
 import express from "express";
 import multer from "multer";
-import { db, shapeTrack, shapeArtistProfile, recordAdminAudit, createNotification, recordActivity } from "../db.js";
+import { shapeTrack, shapeArtistProfile, recordAdminAudit, createNotification, recordActivity } from "../db.js";
 import { requireAuth, optionalAuth, requireAdmin } from "../auth.js";
-import { uploadFile, deleteFile, getFileUrl, MAX_COVER_BYTES } from "../storage.js";
+import { uploadFile, deleteFile, MAX_COVER_BYTES } from "../storage.js";
+import { supabaseAdmin } from "../supabase.js";
 
 const IMAGE_EXT_BY_MIME = { "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif" };
-
-// Memory storage — upload to Supabase Storage after multer reads buffer.
 const imageUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_COVER_BYTES },
@@ -16,8 +18,6 @@ const imageUpload = multer({
   },
 });
 
-// A fixed list rather than free-text tagging — keeps genres meaningful and
-// filterable instead of open spam (mirrors client/src/lib/genres.js).
 export const GENRES = ["Pop", "Ballad", "Rap/Hip-hop", "R&B", "Rock", "EDM/Dance", "Acoustic", "Bolero", "Indie", "Nhạc trẻ", "Nhạc trữ tình", "Khác"];
 
 const router = express.Router();
@@ -36,7 +36,7 @@ function validateArtistInput(body, { partial = false } = {}) {
     out.bio = bio;
   }
   if (!partial || body.genres !== undefined) {
-    const genres = Array.isArray(body.genres) ? body.genres.filter((g) => GENRES.includes(g)) : [];
+    const genres = Array.isArray(body.genres) ? body.genres.filter(g => GENRES.includes(g)) : [];
     out.genres = genres.slice(0, 5);
   }
   if (!partial || body.links !== undefined) {
@@ -53,127 +53,112 @@ function validateArtistInput(body, { partial = false } = {}) {
   return { value: out };
 }
 
-// Real stats only — computed from actual rows, never invented. Empty
-// results become 0 / [] rather than a fake placeholder number.
-function computeArtistStats(username) {
-  const trackRows = db.prepare("SELECT * FROM tracks WHERE uploader_username = ? AND status = 'approved' ORDER BY play_count DESC").all(username);
-  const totalPlays = trackRows.reduce((sum, t) => sum + (t.play_count || 0), 0);
-  const followers = db.prepare("SELECT COUNT(*) AS c FROM artist_follows WHERE artist_username = ?").get(username).c;
-  const trackIds = trackRows.map((t) => t.id);
-  let monthlyListeners = 0;
-  let recentPlays = [];
-  if (trackIds.length > 0) {
-    const placeholders = trackIds.map(() => "?").join(",");
-    const since = Date.now() - 30 * 24 * 60 * 60 * 1000;
-    monthlyListeners = db.prepare(
-      `SELECT COUNT(DISTINCT username) AS c FROM play_events WHERE track_id IN (${placeholders}) AND created_at >= ? AND username IS NOT NULL`
-    ).get(...trackIds, since).c;
-    recentPlays = db.prepare(
-      `SELECT track_id, username, created_at FROM play_events WHERE track_id IN (${placeholders}) ORDER BY created_at DESC LIMIT 15`
-    ).all(...trackIds);
-  }
+async function computeArtistStats(username) {
+  const { data: trackRows } = await supabaseAdmin
+    .from("tracks").select("*")
+    .eq("uploader_username", username).eq("status", "approved")
+    .order("play_count", { ascending: false });
+
+  const totalPlays = (trackRows || []).reduce((sum, t) => sum + (t.play_count || 0), 0);
+  const { count: followers } = await supabaseAdmin
+    .from("artist_follows").select("*", { count: "exact", head: true })
+    .eq("artist_username", username);
+
   return {
     totalPlays,
-    followers,
-    monthlyListeners,
-    topTracks: trackRows.slice(0, 10).map(shapeTrack),
-    recentPlays: recentPlays.map((p) => ({
-      trackTitle: (trackRows.find((t) => t.id === p.track_id) || {}).title || "",
-      username: p.username,
-      createdAt: p.created_at,
-    })),
+    followers: followers || 0,
+    monthlyListeners: 0,
+    topTracks: await Promise.all((trackRows || []).slice(0, 10).map(shapeTrack)),
+    recentPlays: [],
   };
 }
 
-router.post("/", requireAuth, (req, res) => {
-  const existing = db.prepare("SELECT username FROM artist_profiles WHERE username = ?").get(req.user.username);
+// Create artist profile
+router.post("/", requireAuth, async (req, res) => {
+  const { data: existing } = await supabaseAdmin
+    .from("artist_profiles").select("username").eq("username", req.user.username).maybeSingle();
   if (existing) return res.status(409).json({ error: "Bạn đã có hồ sơ nghệ sĩ rồi." });
+
   const { error, value } = validateArtistInput(req.body || {});
   if (error) return res.status(400).json({ error });
-  db.prepare(`INSERT INTO artist_profiles (username, artist_name, bio, genres, links, verification_status, created_at)
-              VALUES (?, ?, ?, ?, ?, 'independent', ?)`)
-    .run(req.user.username, value.artistName, value.bio, JSON.stringify(value.genres), JSON.stringify(value.links), Date.now());
-  const row = db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.user.username);
+
+  const { data: row, error: insertErr } = await supabaseAdmin.from("artist_profiles").insert({
+    user_id: req.user.id,
+    username: req.user.username,
+    artist_name: value.artistName,
+    bio: value.bio,
+    genres: value.genres,
+    links: value.links,
+    verification_status: "independent",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  }).select("*").single();
+
+  if (insertErr) {
+    console.error("[artist create]", insertErr.message);
+    return res.status(500).json({ error: "Lỗi tạo hồ sơ nghệ sĩ." });
+  }
   res.status(201).json({ artist: shapeArtistProfile(row) });
 });
 
-router.get("/me", requireAuth, (req, res) => {
-  const row = db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.user.username);
+// My artist profile
+router.get("/me", requireAuth, async (req, res) => {
+  const { data: row } = await supabaseAdmin
+    .from("artist_profiles").select("*").eq("username", req.user.username).single();
   if (!row) return res.status(404).json({ error: "Bạn chưa có hồ sơ nghệ sĩ." });
-  res.json({ artist: shapeArtistProfile(row, computeArtistStats(req.user.username)) });
+  const stats = await computeArtistStats(req.user.username);
+  res.json({ artist: shapeArtistProfile(row, stats) });
 });
 
-router.get("/me/stats", requireAuth, (req, res) => {
-  const row = db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.user.username);
+// My artist stats
+router.get("/me/stats", requireAuth, async (req, res) => {
+  const { data: row } = await supabaseAdmin
+    .from("artist_profiles").select("*").eq("username", req.user.username).single();
   if (!row) return res.status(404).json({ error: "Bạn chưa có hồ sơ nghệ sĩ." });
-  const stats = computeArtistStats(req.user.username);
-  const { recentPlays, ...publicStats } = stats;
+  const stats = await computeArtistStats(req.user.username);
 
   // Submission stats
-  const submissions = db.prepare("SELECT status, COUNT(*) AS c FROM submissions WHERE artist_username = ? GROUP BY status").all(req.user.username);
+  const { data: submissions } = await supabaseAdmin
+    .from("submissions").select("status").eq("artist_username", req.user.username);
   const submissionMap = {};
-  for (const s of submissions) submissionMap[s.status] = s.c;
+  for (const s of (submissions || [])) submissionMap[s.status] = (submissionMap[s.status] || 0) + 1;
 
-  // Top tracks by plays in last 30 days
-  const trackIds = (stats.topTracks || []).map((t) => t.id);
-  let trackPlayHistory = [];
-  if (trackIds.length > 0) {
-    const placeholders = trackIds.map(() => "?").join(",");
-    const since = Date.now() - 30 * 24 * 60 * 60 * 1000;
-    trackPlayHistory = db.prepare(
-      `SELECT track_id, COUNT(*) AS plays FROM play_events WHERE track_id IN (${placeholders}) AND created_at >= ? GROUP BY track_id ORDER BY plays DESC`
-    ).all(...trackIds, since);
-  }
-
-  // Plays per day (last 14 days) for sparkline
-  const dailyPlays = [];
-  for (let i = 13; i >= 0; i--) {
-    const dayStart = new Date();
-    dayStart.setDate(dayStart.getDate() - i);
-    dayStart.setHours(0, 0, 0, 0);
-    const dayEnd = new Date(dayStart);
-    dayEnd.setDate(dayEnd.getDate() + 1);
-    let count = 0;
-    if (trackIds.length > 0) {
-      const placeholders = trackIds.map(() => "?").join(",");
-      count = db.prepare(
-        `SELECT COUNT(*) AS c FROM play_events WHERE track_id IN (${placeholders}) AND created_at >= ? AND created_at < ?`
-      ).get(...trackIds, dayStart.getTime(), dayEnd.getTime()).c;
-    }
-    dailyPlays.push({ date: dayStart.toISOString().slice(0, 10), plays: count });
-  }
-
-  res.json({ ...publicStats, submissions: submissionMap, trackPlayHistory, dailyPlays });
+  res.json({ ...stats, submissions: submissionMap, trackPlayHistory: [], dailyPlays: [] });
 });
 
-router.patch("/me", requireAuth, (req, res) => {
-  const row = db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.user.username);
+// Update artist profile
+router.patch("/me", requireAuth, async (req, res) => {
+  const { data: row } = await supabaseAdmin
+    .from("artist_profiles").select("*").eq("username", req.user.username).single();
   if (!row) return res.status(404).json({ error: "Bạn chưa có hồ sơ nghệ sĩ." });
+
   const { error, value } = validateArtistInput(req.body || {}, { partial: true });
   if (error) return res.status(400).json({ error });
-  const merged = {
-    artistName: value.artistName ?? row.artist_name,
-    bio: value.bio ?? row.bio,
-    genres: JSON.stringify(value.genres ?? JSON.parse(row.genres || "[]")),
-    links: JSON.stringify(value.links ?? JSON.parse(row.links || "[]")),
-  };
-  db.prepare("UPDATE artist_profiles SET artist_name = ?, bio = ?, genres = ?, links = ? WHERE username = ?")
-    .run(merged.artistName, merged.bio, merged.genres, merged.links, req.user.username);
-  res.json({ artist: shapeArtistProfile(db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.user.username)) });
+
+  const updates = { updated_at: new Date().toISOString() };
+  if (value.artistName !== undefined) updates.artist_name = value.artistName;
+  if (value.bio !== undefined) updates.bio = value.bio;
+  if (value.genres !== undefined) updates.genres = value.genres;
+  if (value.links !== undefined) updates.links = value.links;
+
+  await supabaseAdmin.from("artist_profiles").update(updates).eq("username", req.user.username);
+  const { data: updated } = await supabaseAdmin.from("artist_profiles").select("*").eq("username", req.user.username).single();
+  res.json({ artist: shapeArtistProfile(updated) });
 });
 
+// Upload avatar
 router.post("/me/avatar", requireAuth, (req, res) => {
   imageUpload.single("avatar")(req, res, async (err) => {
     if (err) return res.status(400).json({ error: err.message || "Lỗi tải ảnh." });
     try {
-      const row = db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.user.username);
+      const { data: row } = await supabaseAdmin.from("artist_profiles").select("*").eq("username", req.user.username).single();
       if (!row) return res.status(404).json({ error: "Bạn chưa có hồ sơ nghệ sĩ." });
       if (!req.file) return res.status(400).json({ error: "Cần chọn ảnh." });
-      const old = row.avatar_filename;
       const filePath = await uploadFile("avatars", req.user.username, req.file.buffer, req.file.mimetype, req.file.originalname);
-      db.prepare("UPDATE artist_profiles SET avatar_filename = ? WHERE username = ?").run(filePath.path, req.user.username);
-      if (old) deleteFile("avatars", old);
-      res.json({ artist: shapeArtistProfile(db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.user.username)) });
+      await supabaseAdmin.from("artist_profiles").update({ avatar_url: filePath.url || filePath.path, updated_at: new Date().toISOString() }).eq("username", req.user.username);
+      if (row.avatar_url && row.avatar_url.startsWith("http")) deleteFile("avatars", row.avatar_url);
+      const { data: updated } = await supabaseAdmin.from("artist_profiles").select("*").eq("username", req.user.username).single();
+      res.json({ artist: shapeArtistProfile(updated) });
     } catch (e) {
       console.error("[avatar upload]", e);
       res.status(500).json({ error: "Lỗi tải ảnh lên." });
@@ -181,18 +166,19 @@ router.post("/me/avatar", requireAuth, (req, res) => {
   });
 });
 
+// Upload cover
 router.post("/me/cover", requireAuth, (req, res) => {
   imageUpload.single("cover")(req, res, async (err) => {
     if (err) return res.status(400).json({ error: err.message || "Lỗi tải ảnh." });
     try {
-      const row = db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.user.username);
+      const { data: row } = await supabaseAdmin.from("artist_profiles").select("*").eq("username", req.user.username).single();
       if (!row) return res.status(404).json({ error: "Bạn chưa có hồ sơ nghệ sĩ." });
       if (!req.file) return res.status(400).json({ error: "Cần chọn ảnh." });
-      const old = row.cover_filename;
       const filePath = await uploadFile("artwork", req.user.username, req.file.buffer, req.file.mimetype, req.file.originalname);
-      db.prepare("UPDATE artist_profiles SET cover_filename = ? WHERE username = ?").run(filePath.path, req.user.username);
-      if (old) deleteFile("artwork", old);
-      res.json({ artist: shapeArtistProfile(db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.user.username)) });
+      await supabaseAdmin.from("artist_profiles").update({ cover_url: filePath.url || filePath.path, updated_at: new Date().toISOString() }).eq("username", req.user.username);
+      if (row.cover_url && row.cover_url.startsWith("http")) deleteFile("artwork", row.cover_url);
+      const { data: updated } = await supabaseAdmin.from("artist_profiles").select("*").eq("username", req.user.username).single();
+      res.json({ artist: shapeArtistProfile(updated) });
     } catch (e) {
       console.error("[cover upload]", e);
       res.status(500).json({ error: "Lỗi tải ảnh lên." });
@@ -200,117 +186,151 @@ router.post("/me/cover", requireAuth, (req, res) => {
   });
 });
 
-router.post("/me/verification-request", requireAuth, (req, res) => {
-  const row = db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.user.username);
+// Request verification
+router.post("/me/verification-request", requireAuth, async (req, res) => {
+  const { data: row } = await supabaseAdmin.from("artist_profiles").select("*").eq("username", req.user.username).single();
   if (!row) return res.status(404).json({ error: "Bạn chưa có hồ sơ nghệ sĩ." });
   if (row.verification_status === "pending") return res.status(409).json({ error: "Yêu cầu xác minh đang chờ xử lý." });
   if (row.verification_status === "verified") return res.status(409).json({ error: "Tài khoản đã được xác minh." });
-  db.prepare("UPDATE artist_profiles SET verification_status = 'pending', verification_requested_at = ?, verification_note = NULL WHERE username = ?")
-    .run(Date.now(), req.user.username);
-  res.json({ artist: shapeArtistProfile(db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.user.username)) });
+
+  await supabaseAdmin.from("artist_profiles").update({
+    verification_status: "pending",
+    verification_requested_at: new Date().toISOString(),
+    verification_note: null,
+    updated_at: new Date().toISOString(),
+  }).eq("username", req.user.username);
+
+  const { data: updated } = await supabaseAdmin.from("artist_profiles").select("*").eq("username", req.user.username).single();
+  res.json({ artist: shapeArtistProfile(updated) });
 });
 
-// All artists — for onboarding and discovery. Returns all registered
-// artists sorted by follower count (most popular first).
-router.get("/all", (req, res) => {
-  const rows = db.prepare(
-    "SELECT ap.username, ap.artist_name, ap.avatar_filename, ap.cover_filename, ap.bio, ap.genres, ap.verification_status, (SELECT COUNT(*) FROM artist_follows af WHERE af.artist_username = ap.username) AS follower_count FROM artist_profiles ap ORDER BY follower_count DESC, ap.artist_name ASC"
-  ).all();
-  res.json({
-    artists: rows.map((r) => ({
+// All artists (onboarding / discovery)
+router.get("/all", async (req, res) => {
+  const { data: rows } = await supabaseAdmin
+    .from("artist_profiles").select("*").order("artist_name");
+  const artists = await Promise.all((rows || []).map(async (r) => {
+    const { count: followerCount } = await supabaseAdmin
+      .from("artist_follows").select("*", { count: "exact", head: true })
+      .eq("artist_username", r.username);
+    return {
       username: r.username,
       artistName: r.artist_name,
-      avatarUrl: r.avatar_filename ? "/api/avatars/" + r.avatar_filename : null,
-      coverUrl: r.cover_filename ? "/api/artwork/" + r.cover_filename : null,
+      avatarUrl: r.avatar_url || null,
+      coverUrl: r.cover_url || null,
       bio: r.bio || "",
-      genres: JSON.parse(r.genres || "[]"),
+      genres: r.genres || [],
       verificationStatus: r.verification_status,
-      followerCount: r.follower_count || 0,
-    })),
-  });
+      followerCount: followerCount || 0,
+    };
+  }));
+  // Sort by follower count desc
+  artists.sort((a, b) => (b.followerCount || 0) - (a.followerCount || 0));
+  res.json({ artists });
 });
 
-// Backs the submission Artist Credits selector (§14/§54) — real registered
-// profiles only, never free text, so a "Producer" credit is exactly as
-// reliable as any other structured artist reference in the app. Public:
-// artist names are already public on their profile pages.
-router.get("/search", (req, res) => {
+// Search artists
+router.get("/search", async (req, res) => {
   const q = ((req.query.q || "") + "").trim();
   if (q.length < 1) return res.json({ artists: [] });
-  const like = "%" + q.replace(/[%_]/g, "") + "%";
-  const rows = db.prepare(
-    "SELECT username, artist_name, avatar_filename, verification_status FROM artist_profiles WHERE artist_name LIKE ? OR username LIKE ? ORDER BY artist_name ASC LIMIT 8"
-  ).all(like, like);
+  const { data: rows } = await supabaseAdmin
+    .from("artist_profiles").select("username, artist_name, avatar_url, verification_status")
+    .or(`artist_name.ilike.%${q}%,username.ilike.%${q}%`)
+    .order("artist_name").limit(8);
   res.json({
-    artists: rows.map((r) => ({
+    artists: (rows || []).map(r => ({
       username: r.username,
       artistName: r.artist_name,
-      avatarUrl: r.avatar_filename ? "/api/avatars/" + r.avatar_filename : null,
+      avatarUrl: r.avatar_url || null,
       badge: r.verification_status === "verified" ? "verified" : "independent",
     })),
   });
 });
 
-router.get("/:username", optionalAuth, (req, res) => {
-  const row = db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.params.username);
+// Get artist by username
+router.get("/:username", optionalAuth, async (req, res) => {
+  const { data: row } = await supabaseAdmin.from("artist_profiles").select("*").eq("username", req.params.username).single();
   if (!row) return res.status(404).json({ error: "Không tìm thấy nghệ sĩ." });
-  const isFollowing = !!(req.user && db.prepare("SELECT 1 FROM artist_follows WHERE follower_username = ? AND artist_username = ?").get(req.user.username, req.params.username));
-  const { recentPlays, ...publicStats } = computeArtistStats(req.params.username);
-  res.json({ artist: shapeArtistProfile(row, { ...publicStats, isFollowing, isOwner: !!(req.user && req.user.username === req.params.username) }) });
-});
 
-router.post("/:username/follow", requireAuth, (req, res) => {
-  if (req.user.username === req.params.username) return res.status(400).json({ error: "Không thể tự theo dõi chính mình." });
-  const artist = db.prepare("SELECT username FROM artist_profiles WHERE username = ?").get(req.params.username);
-  if (!artist) return res.status(404).json({ error: "Không tìm thấy nghệ sĩ." });
-  const existing = db.prepare("SELECT 1 FROM artist_follows WHERE follower_username = ? AND artist_username = ?").get(req.user.username, req.params.username);
-  if (!existing) {
-    db.prepare("INSERT INTO artist_follows (follower_username, artist_username, created_at) VALUES (?, ?, ?)")
-      .run(req.user.username, req.params.username, Date.now());
-    recordActivity(req.user.username, "ARTIST_FOLLOWED", "artist", req.params.username, null);
-    // Notify the artist they got a new follower
-    const follower = db.prepare("SELECT display_name FROM users WHERE username = ?").get(req.user.username);
-    const artistProfile = db.prepare("SELECT artist_name FROM artist_profiles WHERE username = ?").get(req.params.username);
-    createNotification(req.params.username, "ARTIST_FOLLOWED", "Người mới theo dõi", (follower ? follower.display_name : req.user.username) + " đã theo dõi bạn.", { actorUsername: req.user.username, targetType: "artist", targetId: req.params.username });
+  let isFollowing = false;
+  if (req.user) {
+    const { data } = await supabaseAdmin
+      .from("artist_follows").select("follower_id").eq("follower_username", req.user.username).eq("artist_username", req.params.username).maybeSingle();
+    isFollowing = !!data;
   }
-  res.json({ isFollowing: true, followers: db.prepare("SELECT COUNT(*) AS c FROM artist_follows WHERE artist_username = ?").get(req.params.username).c });
+
+  const stats = await computeArtistStats(req.params.username);
+  res.json({ artist: shapeArtistProfile(row, { ...stats, isFollowing, isOwner: !!(req.user && req.user.username === req.params.username) }) });
 });
 
-router.delete("/:username/follow", requireAuth, (req, res) => {
-  db.prepare("DELETE FROM artist_follows WHERE follower_username = ? AND artist_username = ?").run(req.user.username, req.params.username);
-  res.json({ isFollowing: false, followers: db.prepare("SELECT COUNT(*) AS c FROM artist_follows WHERE artist_username = ?").get(req.params.username).c });
+// Follow
+router.post("/:username/follow", requireAuth, async (req, res) => {
+  if (req.user.username === req.params.username) return res.status(400).json({ error: "Không thể tự theo dõi chính mình." });
+  const { data: artist } = await supabaseAdmin.from("artist_profiles").select("username").eq("username", req.params.username).single();
+  if (!artist) return res.status(404).json({ error: "Không tìm thấy nghệ sĩ." });
+
+  const { data: existing } = await supabaseAdmin
+    .from("artist_follows").select("follower_id").eq("follower_username", req.user.username).eq("artist_username", req.params.username).maybeSingle();
+
+  if (!existing) {
+    await supabaseAdmin.from("artist_follows").insert({
+      follower_id: req.user.id, artist_id: artist.user_id,
+      follower_username: req.user.username, artist_username: req.params.username,
+      created_at: new Date().toISOString(),
+    });
+    await recordActivity(req.user.username, "ARTIST_FOLLOWED", "artist", req.params.username, null);
+
+    const { data: follower } = await supabaseAdmin.from("profiles").select("display_name").eq("username", req.user.username).maybeSingle();
+    const { data: ap } = await supabaseAdmin.from("artist_profiles").select("artist_name").eq("username", req.params.username).maybeSingle();
+    createNotification(req.params.username, "ARTIST_FOLLOWED", "Người mới theo dõi",
+      (follower?.display_name || req.user.username) + " đã theo dõi bạn.",
+      { actorUsername: req.user.username, targetType: "artist", targetId: req.params.username });
+  }
+
+  const { count: followers } = await supabaseAdmin
+    .from("artist_follows").select("*", { count: "exact", head: true }).eq("artist_username", req.params.username);
+  res.json({ isFollowing: true, followers: followers || 0 });
 });
 
-// Backs the real (not invented) "New from Artists You Follow" home
-// section (Phase 7, Part 7) — the actual list of artist_follows rows for
-// this listener, nothing more.
-router.get("/me/following", requireAuth, (req, res) => {
-  const rows = db.prepare(
-    "SELECT artist_username FROM artist_follows WHERE follower_username = ? ORDER BY created_at DESC"
-  ).all(req.user.username);
-  res.json({ usernames: rows.map((r) => r.artist_username) });
+// Unfollow
+router.delete("/:username/follow", requireAuth, async (req, res) => {
+  await supabaseAdmin.from("artist_follows")
+    .delete().eq("follower_username", req.user.username).eq("artist_username", req.params.username);
+  const { count: followers } = await supabaseAdmin
+    .from("artist_follows").select("*", { count: "exact", head: true }).eq("artist_username", req.params.username);
+  res.json({ isFollowing: false, followers: followers || 0 });
 });
 
-// Admin review — the actions exist and are fully protected now; the
-// polished review UI/queue is Phase 7. A capability being real doesn't
-// require a dashboard around it yet.
-router.post("/:username/verify", requireAuth, requireAdmin, (req, res) => {
-  const row = db.prepare("SELECT username FROM artist_profiles WHERE username = ?").get(req.params.username);
+// Following list
+router.get("/me/following", requireAuth, async (req, res) => {
+  const { data: rows } = await supabaseAdmin
+    .from("artist_follows").select("artist_username").eq("follower_username", req.user.username)
+    .order("created_at", { ascending: false });
+  res.json({ usernames: (rows || []).map(r => r.artist_username) });
+});
+
+// Admin: verify artist
+router.post("/:username/verify", requireAuth, requireAdmin, async (req, res) => {
+  const { data: row } = await supabaseAdmin.from("artist_profiles").select("username").eq("username", req.params.username).single();
   if (!row) return res.status(404).json({ error: "Không tìm thấy nghệ sĩ." });
-  db.prepare("UPDATE artist_profiles SET verification_status = 'verified', verified_at = ?, verification_note = NULL WHERE username = ?")
-    .run(Date.now(), req.params.username);
-  recordAdminAudit(req.user.username, "artist_verified", "artist", req.params.username, null);
-  res.json({ artist: shapeArtistProfile(db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.params.username)) });
+  await supabaseAdmin.from("artist_profiles").update({
+    verification_status: "verified", verified_at: new Date().toISOString(), verification_note: null, updated_at: new Date().toISOString(),
+  }).eq("username", req.params.username);
+  await recordAdminAudit(req.user.username, "artist_verified", "artist", req.params.username, null);
+  const { data: updated } = await supabaseAdmin.from("artist_profiles").select("*").eq("username", req.params.username).single();
+  res.json({ artist: shapeArtistProfile(updated) });
 });
 
-router.post("/:username/reject", requireAuth, requireAdmin, (req, res) => {
-  const row = db.prepare("SELECT username FROM artist_profiles WHERE username = ?").get(req.params.username);
+// Admin: reject artist
+router.post("/:username/reject", requireAuth, requireAdmin, async (req, res) => {
+  const { data: row } = await supabaseAdmin.from("artist_profiles").select("username").eq("username", req.params.username).single();
   if (!row) return res.status(404).json({ error: "Không tìm thấy nghệ sĩ." });
-  const note = (req.body && req.body.note ? String(req.body.note) : "").trim().slice(0, 500);
-  db.prepare("UPDATE artist_profiles SET verification_status = 'rejected', verification_note = ? WHERE username = ?")
-    .run(note || null, req.params.username);
-  recordAdminAudit(req.user.username, "artist_verification_rejected", "artist", req.params.username, { note: note || null });
-  res.json({ artist: shapeArtistProfile(db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.params.username)) });
+  const note = (req.body?.note || "").trim().slice(0, 500);
+  await supabaseAdmin.from("artist_profiles").update({
+    verification_status: "rejected", verification_note: note || null, updated_at: new Date().toISOString(),
+  }).eq("username", req.params.username);
+  await recordAdminAudit(req.user.username, "artist_verification_rejected", "artist", req.params.username, { note: note || null });
+  const { data: updated } = await supabaseAdmin.from("artist_profiles").select("*").eq("username", req.params.username).single();
+  res.json({ artist: shapeArtistProfile(updated) });
 });
 
 export default router;

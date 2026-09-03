@@ -105,7 +105,7 @@ export const api = {
     });
   },
 
-  // Legacy backend OTP (kept for SQLite / backward compat)
+  // Legacy backend OTP endpoint (kept for backward compat)
   sendEmailOTP: (email) => request("/auth/otp/email/send", { method: "POST", body: { email } }),
   verifyEmailOTP: (email, code) => request("/auth/otp/email/verify", { method: "POST", body: { email, code } }),
   sendPhoneOTP: (phone) => request("/auth/otp/phone/send", { method: "POST", body: { phone } }),

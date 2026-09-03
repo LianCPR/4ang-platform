@@ -1,44 +1,49 @@
+/**
+ * 4ANG Tracks Routes — Supabase PostgreSQL only.
+ */
 import express from "express";
-import { randomUUID } from "node:crypto";
-import { db, shapeTrack, recordActivity } from "../db.js";
+import { shapeTrack, recordActivity } from "../db.js";
 import { requireAuth, optionalAuth } from "../auth.js";
 import { rateLimit } from "../rateLimit.js";
 import { getFileUrl } from "../storage.js";
+import { supabaseAdmin } from "../supabase.js";
 
 const router = express.Router();
 
-// Công khai: danh sách bài đã được duyệt — ai ở đâu cũng xem/nghe được, không cần đăng nhập
-// Chỉ status='approved' — một bài bị Admin gỡ (status='unpublished', Phase 7)
-// biến mất khỏi đây ngay lập tức, không cần thêm điều kiện lọc nào khác.
-router.get("/", (req, res) => {
+// Public: approved tracks
+router.get("/", async (req, res) => {
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 100);
   const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
-  const rows = db.prepare("SELECT * FROM tracks WHERE status = 'approved' ORDER BY created_at DESC LIMIT ? OFFSET ?").all(limit, offset);
-  const total = db.prepare("SELECT COUNT(*) AS c FROM tracks WHERE status = 'approved'").get().c;
-  res.json({ tracks: rows.map(shapeTrack), total });
+  const { data: rows, count } = await supabaseAdmin
+    .from("tracks").select("*", { count: "exact" })
+    .eq("status", "approved")
+    .order("created_at", { ascending: false })
+    .range(offset, offset + limit - 1);
+  const tracks = await Promise.all((rows || []).map(shapeTrack));
+  res.json({ tracks, total: count || 0 });
 });
 
-// Cần đăng nhập: bài của chính mình (mọi trạng thái, để tự theo dõi việc duyệt)
-router.get("/mine", requireAuth, (req, res) => {
-  const rows = db.prepare("SELECT * FROM tracks WHERE uploader_username = ? ORDER BY created_at DESC").all(req.user.username);
-  res.json({ tracks: rows.map(shapeTrack) });
+// My tracks (any status)
+router.get("/mine", requireAuth, async (req, res) => {
+  const { data: rows } = await supabaseAdmin
+    .from("tracks").select("*")
+    .eq("uploader_username", req.user.username)
+    .order("created_at", { ascending: false });
+  const tracks = await Promise.all((rows || []).map(shapeTrack));
+  res.json({ tracks });
 });
 
-// Note: the old direct "POST /" track upload (pre-Phase-6) has been
-// removed. Every track now reaches `tracks` through exactly one path —
-// POST /api/submissions -> Admin review -> POST /api/submissions/:id/publish
-// (server/src/routes/submissions.js) — so there is only ever one
-// publication pipeline, per the Phase 7 "no duplicate systems" directive.
-
-// Phát file âm thanh — chỉ khi bài đã duyệt (hoặc chính người đăng / admin xem trước)
+// Serve audio
 router.get("/:id/audio", optionalAuth, async (req, res) => {
   try {
-    const row = db.prepare("SELECT * FROM tracks WHERE id = ?").get(req.params.id);
+    const { data: row } = await supabaseAdmin.from("tracks").select("*").eq("id", req.params.id).single();
     if (!row) return res.status(404).end();
     const isOwner = req.user && req.user.username === row.uploader_username;
     const isAdmin = req.user && req.user.isAdmin;
     if (row.status !== "approved" && !isOwner && !isAdmin) return res.status(403).end();
-    const url = await getFileUrl("audio", row.audio_filename);
+    const filePath = row.audio_path || row.audio_filename;
+    if (!filePath) return res.status(404).end();
+    const url = await getFileUrl("audio", filePath);
     if (!url) return res.status(404).end();
     res.redirect(url);
   } catch (e) {
@@ -47,17 +52,16 @@ router.get("/:id/audio", optionalAuth, async (req, res) => {
   }
 });
 
-// Music video — same gating as audio (approved, or the uploader/admin
-// previewing). Optional: most tracks have no video_filename at all, and
-// that 404s cleanly rather than serving anything.
+// Serve video
 router.get("/:id/video", optionalAuth, async (req, res) => {
   try {
-    const row = db.prepare("SELECT * FROM tracks WHERE id = ?").get(req.params.id);
-    if (!row || !row.video_filename) return res.status(404).end();
+    const { data: row } = await supabaseAdmin.from("tracks").select("*").eq("id", req.params.id).single();
+    if (!row || !(row.video_path || row.video_filename)) return res.status(404).end();
     const isOwner = req.user && req.user.username === row.uploader_username;
     const isAdmin = req.user && req.user.isAdmin;
     if (row.status !== "approved" && !isOwner && !isAdmin) return res.status(403).end();
-    const url = await getFileUrl("videos", row.video_filename);
+    const filePath = row.video_path || row.video_filename;
+    const url = await getFileUrl("videos", filePath);
     if (!url) return res.status(404).end();
     res.redirect(url);
   } catch (e) {
@@ -66,60 +70,103 @@ router.get("/:id/video", optionalAuth, async (req, res) => {
   }
 });
 
-router.post("/:id/like", requireAuth, (req, res) => {
-  const row = db.prepare("SELECT id FROM tracks WHERE id = ?").get(req.params.id);
+// Like / Unlike (toggle)
+router.post("/:id/like", requireAuth, async (req, res) => {
+  const { data: row } = await supabaseAdmin.from("tracks").select("id").eq("id", req.params.id).single();
   if (!row) return res.status(404).json({ error: "Không tìm thấy bài hát." });
-  const existing = db.prepare("SELECT 1 FROM likes WHERE track_id = ? AND username = ?").get(req.params.id, req.user.username);
-  if (existing) db.prepare("DELETE FROM likes WHERE track_id = ? AND username = ?").run(req.params.id, req.user.username);
-  else {
-    db.prepare("INSERT INTO likes (track_id, username) VALUES (?, ?)").run(req.params.id, req.user.username);
-    recordActivity(req.user.username, "TRACK_LIKED", "track", req.params.id, null);
+
+  const { data: existing } = await supabaseAdmin
+    .from("track_likes").select("track_id").eq("track_id", req.params.id).eq("username", req.user.username).maybeSingle();
+
+  if (existing) {
+    await supabaseAdmin.from("track_likes").delete().eq("track_id", req.params.id).eq("username", req.user.username);
+  } else {
+    await supabaseAdmin.from("track_likes").insert({ track_id: req.params.id, username: req.user.username, created_at: new Date().toISOString() });
+    await recordActivity(req.user.username, "TRACK_LIKED", "track", req.params.id, null);
   }
-  res.json({ track: shapeTrack(db.prepare("SELECT * FROM tracks WHERE id = ?").get(req.params.id)) });
+
+  const { data: updated } = await supabaseAdmin.from("tracks").select("*").eq("id", req.params.id).single();
+  res.json({ track: await shapeTrack(updated) });
 });
 
-router.post("/:id/save", requireAuth, (req, res) => {
-  const row = db.prepare("SELECT id FROM tracks WHERE id = ?").get(req.params.id);
+// Save / Unsave (toggle)
+router.post("/:id/save", requireAuth, async (req, res) => {
+  const { data: row } = await supabaseAdmin.from("tracks").select("id").eq("id", req.params.id).single();
   if (!row) return res.status(404).json({ error: "Không tìm thấy bài hát." });
-  const existing = db.prepare("SELECT 1 FROM saves WHERE track_id = ? AND username = ?").get(req.params.id, req.user.username);
-  if (existing) db.prepare("DELETE FROM saves WHERE track_id = ? AND username = ?").run(req.params.id, req.user.username);
-  else db.prepare("INSERT INTO saves (track_id, username) VALUES (?, ?)").run(req.params.id, req.user.username);
-  res.json({ track: shapeTrack(db.prepare("SELECT * FROM tracks WHERE id = ?").get(req.params.id)) });
+
+  const { data: existing } = await supabaseAdmin
+    .from("track_saves").select("track_id").eq("track_id", req.params.id).eq("username", req.user.username).maybeSingle();
+
+  if (existing) {
+    await supabaseAdmin.from("track_saves").delete().eq("track_id", req.params.id).eq("username", req.user.username);
+  } else {
+    await supabaseAdmin.from("track_saves").insert({ track_id: req.params.id, username: req.user.username, created_at: new Date().toISOString() });
+  }
+
+  const { data: updated } = await supabaseAdmin.from("tracks").select("*").eq("id", req.params.id).single();
+  res.json({ track: await shapeTrack(updated) });
 });
 
-router.post("/:id/share", rateLimit({ windowMs: 60_000, max: 30, keyPrefix: "share" }), (req, res) => {
-  const row = db.prepare("SELECT id FROM tracks WHERE id = ?").get(req.params.id);
+// Share count
+router.post("/:id/share", rateLimit({ windowMs: 60_000, max: 30, keyPrefix: "share" }), async (req, res) => {
+  const { data: row } = await supabaseAdmin.from("tracks").select("id").eq("id", req.params.id).single();
   if (!row) return res.status(404).json({ error: "Không tìm thấy bài hát." });
-  db.prepare("UPDATE tracks SET share_count = share_count + 1 WHERE id = ?").run(req.params.id);
-  res.json({ track: shapeTrack(db.prepare("SELECT * FROM tracks WHERE id = ?").get(req.params.id)) });
+
+  await supabaseAdmin.rpc("increment_share_count", { tid: req.params.id }).then(() => {}).catch(async () => {
+    // Fallback: read + write
+    const { data: t } = await supabaseAdmin.from("tracks").select("share_count").eq("id", req.params.id).single();
+    await supabaseAdmin.from("tracks").update({ share_count: (t?.share_count || 0) + 1 }).eq("id", req.params.id);
+  });
+
+  const { data: updated } = await supabaseAdmin.from("tracks").select("*").eq("id", req.params.id).single();
+  res.json({ track: await shapeTrack(updated) });
 });
 
-// Real playback signal — the client calls this once when a track's audio
-// actually starts, never on hover/preview. This is what powers "Trending"
-// on the home page, and (via play_events) real monthly-listener stats for
-// artists; there is no synthetic play-count or listener figure anywhere.
-router.post("/:id/play", optionalAuth, rateLimit({ windowMs: 60_000, max: 60, keyPrefix: "play" }), (req, res) => {
-  const row = db.prepare("SELECT id FROM tracks WHERE id = ?").get(req.params.id);
+// Play event
+router.post("/:id/play", optionalAuth, rateLimit({ windowMs: 60_000, max: 60, keyPrefix: "play" }), async (req, res) => {
+  const { data: row } = await supabaseAdmin.from("tracks").select("id, play_count").eq("id", req.params.id).single();
   if (!row) return res.status(404).json({ error: "Không tìm thấy bài hát." });
-  db.prepare("UPDATE tracks SET play_count = play_count + 1 WHERE id = ?").run(req.params.id);
-  db.prepare("INSERT INTO play_events (id, track_id, username, created_at) VALUES (?, ?, ?, ?)")
-    .run(randomUUID(), req.params.id, (req.user && req.user.username) || null, Date.now());
-  // Record activity event for personalization and analytics.
-  recordActivity(req.user ? req.user.username : null, "TRACK_PLAYED", "track", req.params.id, null);
-  res.json({ track: shapeTrack(db.prepare("SELECT * FROM tracks WHERE id = ?").get(req.params.id)) });
+
+  // Increment play count
+  await supabaseAdmin.from("tracks").update({ play_count: (row.play_count || 0) + 1 }).eq("id", req.params.id);
+
+  // Record play event
+  const { randomUUID } = await import("node:crypto");
+  await supabaseAdmin.from("play_events").insert({
+    id: randomUUID(),
+    track_id: req.params.id,
+    username: req.user?.username || null,
+    created_at: new Date().toISOString(),
+  });
+
+  await recordActivity(req.user?.username || null, "TRACK_PLAYED", "track", req.params.id, null);
+
+  const { data: updated } = await supabaseAdmin.from("tracks").select("*").eq("id", req.params.id).single();
+  res.json({ track: await shapeTrack(updated) });
 });
 
-router.post("/:id/comments", requireAuth, rateLimit({ windowMs: 60_000, max: 30, keyPrefix: "comment" }), (req, res) => {
-  const row = db.prepare("SELECT id FROM tracks WHERE id = ?").get(req.params.id);
+// Add comment
+router.post("/:id/comments", requireAuth, rateLimit({ windowMs: 60_000, max: 30, keyPrefix: "comment" }), async (req, res) => {
+  const { data: row } = await supabaseAdmin.from("tracks").select("id").eq("id", req.params.id).single();
   if (!row) return res.status(404).json({ error: "Không tìm thấy bài hát." });
+
   const text = ((req.body && req.body.text) || "").trim().slice(0, 500);
   if (!text) return res.status(400).json({ error: "Bình luận trống." });
-  const user = db.prepare("SELECT * FROM users WHERE username = ?").get(req.user.username);
-  const id = randomUUID();
-  db.prepare(`INSERT INTO comments (id, track_id, username, display_name, text, created_at)
-              VALUES (?, ?, ?, ?, ?, ?)`)
-    .run(id, req.params.id, user.username, user.display_name, text, Date.now());
-  res.json({ track: shapeTrack(db.prepare("SELECT * FROM tracks WHERE id = ?").get(req.params.id)) });
+
+  const { data: profile } = await supabaseAdmin.from("profiles").select("display_name").eq("username", req.user.username).maybeSingle();
+  const { randomUUID } = await import("node:crypto");
+
+  await supabaseAdmin.from("track_comments").insert({
+    id: randomUUID(),
+    track_id: req.params.id,
+    username: req.user.username,
+    display_name: profile?.display_name || req.user.username,
+    text,
+    created_at: new Date().toISOString(),
+  });
+
+  const { data: updated } = await supabaseAdmin.from("tracks").select("*").eq("id", req.params.id).single();
+  res.json({ track: await shapeTrack(updated) });
 });
 
 export default router;

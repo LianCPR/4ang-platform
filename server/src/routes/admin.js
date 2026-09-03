@@ -1,464 +1,383 @@
+/**
+ * 4ANG Admin Routes — Supabase PostgreSQL only.
+ */
 import express from "express";
-import { randomUUID } from "node:crypto";
-import { db, shapeTrack, shapeArtistProfile, shapePublicUserSummary, recordAdminAudit, shapeAuditEntry, shapeArtistApplication, shapeVerifiedArtistApplication, createNotification, getSetting, setSetting } from "../db.js";
+import { shapeTrack, shapeArtistProfile, shapePublicUserSummary, recordAdminAudit, shapeAuditEntry, shapeArtistApplication, shapeVerifiedArtistApplication, shapeRelease, createNotification, getSetting, setSetting } from "../db.js";
 import { requireAuth, requireAdmin } from "../auth.js";
 import { rateLimit } from "../rateLimit.js";
 import { GENRES } from "./artists.js";
+import { supabaseAdmin } from "../supabase.js";
 
 const router = express.Router();
-// Every route below is Admin-only — this is the one place that
-// distinction actually matters (Part 32/55): a frontend route guard is
-// convenience, this middleware is the real access control.
 router.use(requireAuth, requireAdmin);
 
 const adminActionLimit = rateLimit({ windowMs: 60_000, max: 60, keyPrefix: "admin-action" });
 
-/* ============================== DASHBOARD ============================== */
-// Every number here is a real COUNT(*) against real rows — never a
-// placeholder, never rounded up to "look alive" (Part 34/62).
-router.get("/stats", async (req, res) => {
-  const c = (sql, ...args) => db.prepare(sql).get(...args).c;
-  const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
-  const USE_SUPABASE = !!process.env.SUPABASE_URL;
-
-  // Query Supabase for user/profile counts (SQLite users table is empty for Supabase Auth users)
-  let userTotal = 0;
-  let userNewToday = 0;
-  let artistTotal = 0;
-  let artistVerified = 0;
-  let artistPending = 0;
-  let restricted = 0;
-
-  if (USE_SUPABASE) {
-    try {
-      const { supabaseAdmin } = await import("../supabase.js");
-      const dayAgoISO = new Date(dayAgo).toISOString();
-
-      // Count profiles (all users)
-      const { count: profileCount } = await supabaseAdmin.from("profiles").select("*", { count: "exact", head: true });
-      userTotal = profileCount || 0;
-
-      // Count new today (profiles created after dayAgo)
-      const { count: newTodayCount } = await supabaseAdmin.from("profiles").select("*", { count: "exact", head: true }).gte("created_at", dayAgo);
-      userNewToday = newTodayCount || 0;
-
-      // Count restricted
-      const { count: restrictedCount } = await supabaseAdmin.from("profiles").select("*", { count: "exact", head: true }).eq("is_restricted", true);
-      restricted = restrictedCount || 0;
-
-      // Artist profiles: combine Supabase + SQLite artist_profiles
-      const { count: supaArtistCount } = await supabaseAdmin.from("artist_profiles").select("*", { count: "exact", head: true });
-      const { count: supaVerifiedCount } = await supabaseAdmin.from("artist_profiles").select("*", { count: "exact", head: true }).eq("verification_status", "verified");
-      const { count: supaPendingCount } = await supabaseAdmin.from("artist_profiles").select("*", { count: "exact", head: true }).eq("verification_status", "pending");
-      // Also count SQLite artist_profiles (legacy data)
-      const sqliteArtists = c("SELECT COUNT(*) AS c FROM artist_profiles");
-      const sqliteVerified = c("SELECT COUNT(*) AS c FROM artist_profiles WHERE verification_status = 'verified'");
-      const sqlitePending = c("SELECT COUNT(*) AS c FROM artist_profiles WHERE verification_status = 'pending'");
-      artistTotal = (supaArtistCount || 0) + sqliteArtists;
-      artistVerified = (supaVerifiedCount || 0) + sqliteVerified;
-      artistPending = (supaPendingCount || 0) + sqlitePending;
-      // Also count pending artist applications ("Trở thành nghệ sĩ")
-      try {
-        const pendingApps = c("SELECT COUNT(*) AS c FROM artist_applications WHERE status IN ('pending', 'reviewing')");
-        artistPending += pendingApps;
-      } catch (_) { /* table may not exist */ }
-    } catch (e) {
-      console.error("[ADMIN STATS] Supabase query failed:", e.message);
-      // Fallback to SQLite counts
-      userTotal = c("SELECT COUNT(*) AS c FROM users");
-      userNewToday = c("SELECT COUNT(*) AS c FROM users WHERE created_at >= ?", dayAgo);
-      restricted = c("SELECT COUNT(*) AS c FROM users WHERE is_restricted = 1");
-      artistTotal = c("SELECT COUNT(*) AS c FROM artist_profiles");
-      artistVerified = c("SELECT COUNT(*) AS c FROM artist_profiles WHERE verification_status = 'verified'");
-      artistPending = c("SELECT COUNT(*) AS c FROM artist_profiles WHERE verification_status = 'pending'");
-      try { artistPending += c("SELECT COUNT(*) AS c FROM artist_applications WHERE status IN ('pending', 'reviewing')"); } catch (_) {}
-    }
-  } else {
-    userTotal = c("SELECT COUNT(*) AS c FROM users");
-    userNewToday = c("SELECT COUNT(*) AS c FROM users WHERE created_at >= ?", dayAgo);
-    restricted = c("SELECT COUNT(*) AS c FROM users WHERE is_restricted = 1");
-    artistTotal = c("SELECT COUNT(*) AS c FROM artist_profiles");
-    artistVerified = c("SELECT COUNT(*) AS c FROM artist_profiles WHERE verification_status = 'verified'");
-    artistPending = c("SELECT COUNT(*) AS c FROM artist_profiles WHERE verification_status = 'pending'");
-    try { artistPending += c("SELECT COUNT(*) AS c FROM artist_applications WHERE status IN ('pending', 'reviewing')"); } catch (_) {}
+// Helper: count rows matching filters
+async function count(table, filters = {}) {
+  let query = supabaseAdmin.from(table).select("*", { count: "exact", head: true });
+  for (const [k, v] of Object.entries(filters)) {
+    if (v === null || v === undefined) query = query.is(k, null);
+    else if (typeof v === "object" && v._op) {
+      switch (v._op) {
+        case "gte": query = query.gte(k, v.v); break;
+        case "lte": query = query.lte(k, v.v); break;
+        case "gt": query = query.gt(k, v.v); break;
+        case "in": query = query.in(k, v.v); break;
+        default: query = query.eq(k, v);
+      }
+    } else query = query.eq(k, v);
   }
+  const { count: c, error } = await query;
+  if (error) throw new Error(`count ${table}: ${error.message}`);
+  return c || 0;
+}
 
-  const stats = {
-    submissions: {
-      pendingReview: c("SELECT COUNT(*) AS c FROM submissions WHERE status = 'pending_review'"),
-      underReview: c("SELECT COUNT(*) AS c FROM submissions WHERE status = 'under_review'"),
-      changesRequested: c("SELECT COUNT(*) AS c FROM submissions WHERE status = 'changes_requested'"),
-      approvedAwaitingPublish: c("SELECT COUNT(*) AS c FROM submissions WHERE status = 'approved'"),
-      approvedToday: c("SELECT COUNT(*) AS c FROM submissions WHERE status IN ('approved','published') AND reviewed_at >= ?", dayAgo),
-      rejectedToday: c("SELECT COUNT(*) AS c FROM submissions WHERE status = 'rejected' AND reviewed_at >= ?", dayAgo),
-      publishedTotal: c("SELECT COUNT(*) AS c FROM submissions WHERE status = 'published'"),
-      rejectedTotal: c("SELECT COUNT(*) AS c FROM submissions WHERE status = 'rejected'"),
-    },
-    users: {
-      total: userTotal,
-      newToday: userNewToday,
-      restricted: restricted,
-    },
-    artists: {
-      total: artistTotal,
-      verified: artistVerified,
-      verificationPending: artistPending,
-    },
-    music: {
-      published: c("SELECT COUNT(*) AS c FROM tracks WHERE status = 'approved'"),
-      unpublished: c("SELECT COUNT(*) AS c FROM tracks WHERE status = 'unpublished'"),
-      totalPlays: db.prepare("SELECT COALESCE(SUM(play_count),0) AS c FROM tracks WHERE status='approved'").get().c,
-    },
-    reports: {
-      open: c("SELECT COUNT(*) AS c FROM reports WHERE status = 'open'"),
-    },
-  };
-  res.json({ stats });
+// ======================== DASHBOARD ========================
+router.get("/stats", async (req, res) => {
+  try {
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+    const userTotal = await count("profiles");
+    const userNewToday = await count("profiles", { created_at: { _op: "gte", v: dayAgo } });
+    const restricted = await count("profiles", { is_restricted: true });
+
+    const artistTotal = await count("artist_profiles");
+    const artistVerified = await count("artist_profiles", { verification_status: "verified" });
+    const artistPending = await count("artist_profiles", { verification_status: "pending" });
+
+    const pendingApps = await count("artist_applications", { status: { _op: "in", v: ["pending", "reviewing"] } });
+
+    const submissionsPending = await count("submissions", { status: "pending_review" });
+    const submissionsUnderReview = await count("submissions", { status: "under_review" });
+    const submissionsChangesRequested = await count("submissions", { status: "changes_requested" });
+    const submissionsApproved = await count("submissions", { status: "approved" });
+    const submissionsApprovedToday = await count("submissions", { status: { _op: "in", v: ["approved", "published"] }, reviewed_at: { _op: "gte", v: dayAgo } });
+    const submissionsRejectedToday = await count("submissions", { status: "rejected", reviewed_at: { _op: "gte", v: dayAgo } });
+    const submissionsPublished = await count("submissions", { status: "published" });
+    const submissionsRejected = await count("submissions", { status: "rejected" });
+
+    const musicPublished = await count("tracks", { status: "approved" });
+    const reportsOpen = await count("reports", { status: "open" });
+
+    // Total plays
+    const { data: playData } = await supabaseAdmin
+      .from("tracks").select("play_count").eq("status", "approved");
+    const totalPlays = (playData || []).reduce((sum, t) => sum + (t.play_count || 0), 0);
+
+    res.json({
+      stats: {
+        submissions: {
+          pendingReview: submissionsPending, underReview: submissionsUnderReview,
+          changesRequested: submissionsChangesRequested, approvedAwaitingPublish: submissionsApproved,
+          approvedToday: submissionsApprovedToday, rejectedToday: submissionsRejectedToday,
+          publishedTotal: submissionsPublished, rejectedTotal: submissionsRejected,
+        },
+        users: { total: userTotal, newToday: userNewToday, restricted },
+        artists: { total: artistTotal, verified: artistVerified, verificationPending: artistPending + pendingApps },
+        music: { published: musicPublished, unpublished: 0, totalPlays },
+        reports: { open: reportsOpen },
+      },
+    });
+  } catch (e) {
+    console.error("[ADMIN STATS]", e);
+    res.status(500).json({ error: "Không thể tải thống kê. Vui lòng thử lại." });
+  }
 });
 
-// Recent moderation activity — a real merge of submission events and the
-// general admin audit log, newest first. Nothing synthetic; an empty
-// platform simply shows an empty list.
-router.get("/activity", (req, res) => {
+// ======================== ACTIVITY ========================
+router.get("/activity", async (req, res) => {
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 25, 1), 100);
-  const events = db.prepare(`
-    SELECT e.id, e.actor_username, e.action, e.note, e.created_at, s.title AS submission_title, s.id AS submission_id
-    FROM submission_events e JOIN submissions s ON s.id = e.submission_id
-    WHERE e.action != 'submitted' AND e.action != 'resubmitted'
-    ORDER BY e.created_at DESC LIMIT ?
-  `).all(limit).map((r) => ({
-    id: "sub-" + r.id, actorUsername: r.actor_username, action: r.action, note: r.note,
-    targetType: "submission", targetId: r.submission_id, targetLabel: r.submission_title, createdAt: r.created_at,
+
+  // Submission events
+  const { data: subEvents } = await supabaseAdmin
+    .from("submission_events").select("*, submissions!inner(id, title)")
+    .not("action", "in", "('submitted','resubmitted')")
+    .order("created_at", { ascending: false }).limit(limit);
+
+  const events = (subEvents || []).map(e => ({
+    id: "sub-" + e.id, actorUsername: e.actor_username, action: e.action, note: e.note,
+    targetType: "submission", targetId: e.submission_id, targetLabel: e.submissions?.title,
+    createdAt: new Date(e.created_at).getTime(),
   }));
-  // Submission decisions are already fully represented above via
-  // submission_events (with their note text) — exclude the mirrored
-  // admin_audit_log copy here so the dashboard feed shows each real
-  // action once, not twice. (The raw /audit-log endpoint below still
-  // shows the complete, unfiltered trail.)
-  const audits = db.prepare("SELECT * FROM admin_audit_log WHERE target_type != 'submission' ORDER BY created_at DESC LIMIT ?").all(limit)
-    .map((r) => ({ ...shapeAuditEntry(r), id: "aud-" + r.id }));
+
+  // Audit log (non-submission)
+  const { data: auditRows } = await supabaseAdmin
+    .from("admin_audit_log").select("*")
+    .neq("target_type", "submission")
+    .order("created_at", { ascending: false }).limit(limit);
+
+  const audits = (auditRows || []).map(r => ({
+    ...shapeAuditEntry(r), id: "aud-" + r.id,
+  }));
+
   const merged = [...events, ...audits].sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
   res.json({ activity: merged });
 });
 
-/* =============================== ANALYTICS =============================== */
-// Real day-bucketed aggregates for the requested window — never randomly
-// generated points (Part 51/52). Days with zero activity are real zeros.
-function dayBuckets(days) {
-  const out = [];
-  const now = new Date();
-  for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(now);
-    d.setUTCDate(d.getUTCDate() - i);
-    const key = d.toISOString().slice(0, 10);
-    const start = Date.parse(key + "T00:00:00.000Z");
-    out.push({ date: key, start, end: start + 24 * 60 * 60 * 1000 });
-  }
-  return out;
-}
-function countInRange(sql, start, end, extra = []) {
-  return db.prepare(sql).get(start, end, ...extra).c;
-}
-router.get("/analytics", (req, res) => {
-  const days = Math.min(Math.max(parseInt(req.query.days, 10) || 30, 7), 90);
-  const buckets = dayBuckets(days);
-  const series = buckets.map((b) => ({
-    date: b.date,
-    newUsers: countInRange("SELECT COUNT(*) AS c FROM users WHERE created_at >= ? AND created_at < ?", b.start, b.end),
-    submissionsCreated: countInRange("SELECT COUNT(*) AS c FROM submissions WHERE submitted_at >= ? AND submitted_at < ?", b.start, b.end),
-    tracksPublished: countInRange("SELECT COUNT(*) AS c FROM tracks WHERE created_at >= ? AND created_at < ?", b.start, b.end),
-    plays: countInRange("SELECT COUNT(*) AS c FROM play_events WHERE created_at >= ? AND created_at < ?", b.start, b.end),
-  }));
-  const totals = series.reduce((acc, d) => ({
-    newUsers: acc.newUsers + d.newUsers,
-    submissionsCreated: acc.submissionsCreated + d.submissionsCreated,
-    tracksPublished: acc.tracksPublished + d.tracksPublished,
-    plays: acc.plays + d.plays,
-  }), { newUsers: 0, submissionsCreated: 0, tracksPublished: 0, plays: 0 });
-  res.json({ days, series, totals });
-});
-
-/* ============================ VERIFICATIONS ============================ */
-// Returns BOTH artist profile verification requests AND pending artist
-// application registrations, merged into one list. Each entry carries a
-// `_type` tag ("profile" or "application") so the frontend can dispatch
-// approve/reject to the correct endpoint.
-router.get("/verifications", (req, res) => {
+// ======================== VERIFICATIONS ========================
+router.get("/verifications", async (req, res) => {
   try {
     const status = (req.query.status || "pending").trim();
 
-    // --- Artist profile badge verifications ---
-    let profiles = [];
-    try {
-      const profileRows = status === "all"
-        ? db.prepare("SELECT * FROM artist_profiles ORDER BY verification_requested_at DESC, created_at DESC").all()
-        : db.prepare("SELECT * FROM artist_profiles WHERE verification_status = ? ORDER BY verification_requested_at ASC, created_at ASC").all(status);
-      profiles = profileRows.map((r) => ({ ...shapeArtistProfile(r), _type: "profile" }));
-    } catch (e) {
-      console.error("[VERIFICATIONS] artist_profiles query failed:", e.message);
-    }
+    // Artist profile verifications
+    let profileQuery = supabaseAdmin.from("artist_profiles").select("*");
+    if (status !== "all") profileQuery = profileQuery.eq("verification_status", status);
+    profileQuery = profileQuery.order("created_at", { ascending: status === "all" ? false : true });
+    const { data: profileRows } = await profileQuery;
+    const profiles = (profileRows || []).map(r => ({ ...shapeArtistProfile(r), _type: "profile" }));
 
-    // --- Artist application registrations ("Trở thành nghệ sĩ") ---
-    let applications = [];
-    try {
-      const appStatusMap = { pending: "pending", reviewing: "pending", verified: "approved", rejected: "rejected" };
-      let applicationRows = [];
-      if (status === "all") {
-        applicationRows = db.prepare("SELECT * FROM artist_applications ORDER BY submitted_at DESC").all();
-      } else if (status === "pending" || status === "reviewing") {
-        applicationRows = db.prepare("SELECT * FROM artist_applications WHERE status IN ('pending', 'reviewing') ORDER BY submitted_at ASC").all();
-      } else {
-        const mapped = appStatusMap[status] || status;
-        applicationRows = db.prepare("SELECT * FROM artist_applications WHERE status = ? ORDER BY submitted_at ASC").all(mapped);
-      }
-      applications = applicationRows.map((r) => ({
-        ...shapeArtistApplication(r),
-        _type: "application",
-        username: r.username,
-        artistName: r.artist_name,
-        verificationStatus: r.status === "approved" ? "verified" : r.status === "rejected" ? "rejected" : "pending",
-        verificationNote: r.review_note || null,
-        avatarUrl: null,
-      }));
-    } catch (e) {
-      console.error("[VERIFICATIONS] artist_applications query failed:", e.message);
+    // Artist applications
+    let appQuery = supabaseAdmin.from("artist_applications").select("*");
+    if (status === "all") {
+      appQuery = appQuery.order("submitted_at", { ascending: false });
+    } else if (status === "pending" || status === "reviewing") {
+      appQuery = appQuery.in("status", ["pending", "reviewing"]).order("submitted_at");
+    } else {
+      const mapped = { pending: "pending", reviewing: "pending", verified: "approved", rejected: "rejected" };
+      appQuery = appQuery.eq("status", mapped[status] || status).order("submitted_at");
     }
+    const { data: appRows } = await appQuery;
+    const applications = (appRows || []).map(r => ({
+      ...shapeArtistApplication(r), _type: "application",
+      verificationStatus: r.status === "approved" ? "verified" : r.status === "rejected" ? "rejected" : "pending",
+      verificationNote: r.review_note || null,
+      avatarUrl: null,
+    }));
 
-    // Merge and sort: pending first (oldest first), then others (newest first)
     const merged = [...profiles, ...applications];
     merged.sort((a, b) => {
-      const aPending = a.verificationStatus === "pending" ? 0 : 1;
-      const bPending = b.verificationStatus === "pending" ? 0 : 1;
-      if (aPending !== bPending) return aPending - bPending;
-      const aTime = a._type === "application" ? (a.submittedAt || 0) : (a.createdAt || 0);
-      const bTime = b._type === "application" ? (b.submittedAt || 0) : (b.createdAt || 0);
-      return aTime - bTime;
+      const aP = a.verificationStatus === "pending" ? 0 : 1;
+      const bP = b.verificationStatus === "pending" ? 0 : 1;
+      if (aP !== bP) return aP - bP;
+      const aT = a._type === "application" ? (a.submittedAt || 0) : (a.createdAt || 0);
+      const bT = b._type === "application" ? (b.submittedAt || 0) : (b.createdAt || 0);
+      return aT - bT;
     });
-    // Debug logging removed — production verified
     res.json({ artists: merged });
   } catch (e) {
-    console.error("[VERIFICATIONS] unexpected error:", e);
-    res.json({ artists: [] });
+    console.error("[VERIFICATIONS]", e);
+    res.status(500).json({ error: "Không thể tải danh sách xác minh. Vui lòng thử lại." });
   }
 });
 
-/* ================================ USERS ================================ */
-router.get("/users", (req, res) => {
+// ======================== USERS ========================
+router.get("/users", async (req, res) => {
   const q = ((req.query.q || "") + "").trim();
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
-  let rows;
+  let query = supabaseAdmin.from("profiles").select("*").order("created_at", { ascending: false }).limit(limit);
   if (q) {
-    const like = "%" + q.replace(/[%_]/g, "") + "%";
-    rows = db.prepare("SELECT * FROM users WHERE username LIKE ? OR display_name LIKE ? OR email LIKE ? ORDER BY created_at DESC LIMIT ?").all(like, like, like, limit);
-  } else {
-    rows = db.prepare("SELECT * FROM users ORDER BY created_at DESC LIMIT ?").all(limit);
+    query = query.or(`username.ilike.%${q}%,display_name.ilike.%${q}%,email.ilike.%${q}%`);
   }
-  res.json({ users: rows.map(shapePublicUserSummary) });
+  const { data: rows } = await query;
+  res.json({ users: (rows || []).map(shapePublicUserSummary) });
 });
 
-router.get("/users/:username", (req, res) => {
-  const row = db.prepare("SELECT * FROM users WHERE username = ?").get(req.params.username);
+router.get("/users/:username", async (req, res) => {
+  const { data: row } = await supabaseAdmin.from("profiles").select("*").eq("username", req.params.username).single();
   if (!row) return res.status(404).json({ error: "Không tìm thấy tài khoản." });
-  const artist = db.prepare("SELECT * FROM artist_profiles WHERE username = ?").get(req.params.username);
-  const trackCount = db.prepare("SELECT COUNT(*) AS c FROM tracks WHERE uploader_username = ? AND status = 'approved'").get(req.params.username).c;
-  res.json({
-    user: shapePublicUserSummary(row),
-    artist: artist ? shapeArtistProfile(artist) : null,
-    publishedTrackCount: trackCount,
-  });
+  const { data: artist } = await supabaseAdmin.from("artist_profiles").select("*").eq("username", req.params.username).maybeSingle();
+  const trackCount = await count("tracks", { uploader_username: req.params.username, status: "approved" });
+  res.json({ user: shapePublicUserSummary(row), artist: artist ? shapeArtistProfile(artist) : null, publishedTrackCount: trackCount });
 });
 
-// Never targets an admin account — restriction is for moderating normal
-// users/artists, not an escalation path against platform staff (Part 55).
-router.post("/users/:username/restrict", adminActionLimit, (req, res) => {
-  const row = db.prepare("SELECT * FROM users WHERE username = ?").get(req.params.username);
+router.post("/users/:username/restrict", adminActionLimit, async (req, res) => {
+  const { data: row } = await supabaseAdmin.from("profiles").select("*").eq("username", req.params.username).single();
   if (!row) return res.status(404).json({ error: "Không tìm thấy tài khoản." });
-  if (row.is_admin) return res.status(400).json({ error: "Không thể hạn chế tài khoản Admin." });
+  if (row.role === "admin") return res.status(400).json({ error: "Không thể hạn chế tài khoản Admin." });
   const reason = ((req.body && req.body.reason) || "").trim().slice(0, 500);
-  db.prepare("UPDATE users SET is_restricted = 1, restricted_at = ?, restricted_reason = ?, restricted_by = ? WHERE username = ?")
-    .run(Date.now(), reason || null, req.user.username, req.params.username);
-  recordAdminAudit(req.user.username, "user_restricted", "user", req.params.username, { reason: reason || null });
-  res.json({ user: shapePublicUserSummary(db.prepare("SELECT * FROM users WHERE username = ?").get(req.params.username)) });
+  await supabaseAdmin.from("profiles").update({
+    is_restricted: true, restricted_at: new Date().toISOString(), restricted_reason: reason || null, restricted_by: req.user.id,
+  }).eq("username", req.params.username);
+  await recordAdminAudit(req.user.username, "user_restricted", "user", req.params.username, { reason: reason || null });
+  const { data: updated } = await supabaseAdmin.from("profiles").select("*").eq("username", req.params.username).single();
+  res.json({ user: shapePublicUserSummary(updated) });
 });
 
-router.post("/users/:username/restore", adminActionLimit, (req, res) => {
-  const row = db.prepare("SELECT * FROM users WHERE username = ?").get(req.params.username);
+router.post("/users/:username/restore", adminActionLimit, async (req, res) => {
+  const { data: row } = await supabaseAdmin.from("profiles").select("*").eq("username", req.params.username).single();
   if (!row) return res.status(404).json({ error: "Không tìm thấy tài khoản." });
-  db.prepare("UPDATE users SET is_restricted = 0, restricted_at = NULL, restricted_reason = NULL, restricted_by = NULL WHERE username = ?")
-    .run(req.params.username);
-  recordAdminAudit(req.user.username, "user_restored", "user", req.params.username, null);
-  res.json({ user: shapePublicUserSummary(db.prepare("SELECT * FROM users WHERE username = ?").get(req.params.username)) });
+  await supabaseAdmin.from("profiles").update({
+    is_restricted: false, restricted_at: null, restricted_reason: null, restricted_by: null,
+  }).eq("username", req.params.username);
+  await recordAdminAudit(req.user.username, "user_restored", "user", req.params.username, null);
+  const { data: updated } = await supabaseAdmin.from("profiles").select("*").eq("username", req.params.username).single();
+  res.json({ user: shapePublicUserSummary(updated) });
 });
 
-/* ================================ MUSIC ================================= */
-router.get("/tracks", (req, res) => {
+// ======================== MUSIC ========================
+router.get("/tracks", async (req, res) => {
   const q = ((req.query.q || "") + "").trim();
   const status = (req.query.status || "").trim();
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
-  const clauses = [];
-  const args = [];
-  if (q) {
-    const like = "%" + q.replace(/[%_]/g, "") + "%";
-    clauses.push("(title LIKE ? OR uploader_display_name LIKE ? OR uploader_username LIKE ?)");
-    args.push(like, like, like);
-  }
-  if (status) { clauses.push("status = ?"); args.push(status); }
-  const where = clauses.length ? "WHERE " + clauses.join(" AND ") : "";
-  const rows = db.prepare(`SELECT * FROM tracks ${where} ORDER BY created_at DESC LIMIT ?`).all(...args, limit);
-  res.json({ tracks: rows.map(shapeTrack) });
+  let query = supabaseAdmin.from("tracks").select("*").order("created_at", { ascending: false }).limit(limit);
+  if (status) query = query.eq("status", status);
+  if (q) query = query.or(`title.ilike.%${q}%,uploader_display_name.ilike.%${q}%,uploader_username.ilike.%${q}%`);
+  const { data: rows } = await query;
+  const tracks = await Promise.all((rows || []).map(shapeTrack));
+  res.json({ tracks });
 });
 
-router.patch("/tracks/:id", adminActionLimit, (req, res) => {
-  const row = db.prepare("SELECT * FROM tracks WHERE id = ?").get(req.params.id);
+router.patch("/tracks/:id", adminActionLimit, async (req, res) => {
+  const { data: row } = await supabaseAdmin.from("tracks").select("*").eq("id", req.params.id).single();
   if (!row) return res.status(404).json({ error: "Không tìm thấy bài hát." });
   const body = req.body || {};
   const title = body.title !== undefined ? String(body.title).trim() : row.title;
   if (!title || title.length < 2 || title.length > 120) return res.status(400).json({ error: "Tên bài hát cần 2-120 ký tự." });
-  const releaseDate = body.releaseDate !== undefined ? String(body.releaseDate).trim() : row.release_date;
-  if (releaseDate && !/^\d{4}-\d{2}-\d{2}$/.test(releaseDate)) return res.status(400).json({ error: "Ngày phát hành không hợp lệ." });
-  let genres = row.genres;
-  if (body.genres !== undefined) {
-    const arr = Array.isArray(body.genres) ? body.genres.filter((g) => GENRES.includes(g)) : [];
-    genres = JSON.stringify(arr.slice(0, 5));
-  }
-  db.prepare("UPDATE tracks SET title = ?, release_date = ?, genres = ? WHERE id = ?").run(title, releaseDate || null, genres, req.params.id);
-  recordAdminAudit(req.user.username, "track_metadata_edited", "track", req.params.id, { title });
-  res.json({ track: shapeTrack(db.prepare("SELECT * FROM tracks WHERE id = ?").get(req.params.id)) });
+  const updates = { title };
+  if (body.releaseDate !== undefined) updates.release_date = String(body.releaseDate).trim() || null;
+  if (body.genres !== undefined) updates.genres = Array.isArray(body.genres) ? body.genres.filter(g => GENRES.includes(g)).slice(0, 5) : [];
+  await supabaseAdmin.from("tracks").update(updates).eq("id", req.params.id);
+  await recordAdminAudit(req.user.username, "track_metadata_edited", "track", req.params.id, { title });
+  const { data: updated } = await supabaseAdmin.from("tracks").select("*").eq("id", req.params.id).single();
+  res.json({ track: await shapeTrack(updated) });
 });
 
-router.post("/tracks/:id/unpublish", adminActionLimit, (req, res) => {
-  const row = db.prepare("SELECT * FROM tracks WHERE id = ?").get(req.params.id);
+router.post("/tracks/:id/unpublish", adminActionLimit, async (req, res) => {
+  const { data: row } = await supabaseAdmin.from("tracks").select("*").eq("id", req.params.id).single();
   if (!row) return res.status(404).json({ error: "Không tìm thấy bài hát." });
   if (row.status !== "approved") return res.status(409).json({ error: "Bài hát này hiện không được phát hành." });
   const reason = ((req.body && req.body.reason) || "").trim().slice(0, 500);
-  db.prepare("UPDATE tracks SET status = 'unpublished' WHERE id = ?").run(req.params.id);
-  recordAdminAudit(req.user.username, "track_unpublished", "track", req.params.id, { title: row.title, reason: reason || null });
-  res.json({ track: shapeTrack(db.prepare("SELECT * FROM tracks WHERE id = ?").get(req.params.id)) });
+  await supabaseAdmin.from("tracks").update({ status: "removed" }).eq("id", req.params.id);
+  await recordAdminAudit(req.user.username, "track_unpublished", "track", req.params.id, { title: row.title, reason: reason || null });
+  const { data: updated } = await supabaseAdmin.from("tracks").select("*").eq("id", req.params.id).single();
+  res.json({ track: await shapeTrack(updated) });
 });
 
-router.post("/tracks/:id/republish", adminActionLimit, (req, res) => {
-  const row = db.prepare("SELECT * FROM tracks WHERE id = ?").get(req.params.id);
+router.post("/tracks/:id/republish", adminActionLimit, async (req, res) => {
+  const { data: row } = await supabaseAdmin.from("tracks").select("*").eq("id", req.params.id).single();
   if (!row) return res.status(404).json({ error: "Không tìm thấy bài hát." });
-  if (row.status !== "unpublished") return res.status(409).json({ error: "Bài hát này không ở trạng thái đã gỡ." });
-  db.prepare("UPDATE tracks SET status = 'approved' WHERE id = ?").run(req.params.id);
-  recordAdminAudit(req.user.username, "track_republished", "track", req.params.id, { title: row.title });
-  res.json({ track: shapeTrack(db.prepare("SELECT * FROM tracks WHERE id = ?").get(req.params.id)) });
+  await supabaseAdmin.from("tracks").update({ status: "approved" }).eq("id", req.params.id);
+  await recordAdminAudit(req.user.username, "track_republished", "track", req.params.id, { title: row.title });
+  const { data: updated } = await supabaseAdmin.from("tracks").select("*").eq("id", req.params.id).single();
+  res.json({ track: await shapeTrack(updated) });
 });
 
-/* =============================== RELEASES ================================ */
-router.get("/releases", (req, res) => {
+// ======================== RELEASES ========================
+router.get("/releases", async (req, res) => {
   const status = (req.query.status || "").trim();
   const type = (req.query.type || "").trim();
   const q = ((req.query.q || "") + "").trim();
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
-  const clauses = [];
-  const args = [];
-  if (status) { clauses.push("r.status = ?"); args.push(status); }
-  if (type) { clauses.push("r.type = ?"); args.push(type); }
-  if (q) { clauses.push("(r.title LIKE ? OR r.created_by LIKE ?)"); args.push("%" + q + "%", "%" + q + "%"); }
-  const where = clauses.length ? "WHERE " + clauses.join(" AND ") : "";
-  const rows = db.prepare(`SELECT r.*, COUNT(rt.id) AS track_count FROM releases r LEFT JOIN release_tracks rt ON rt.release_id = r.id ${where} GROUP BY r.id ORDER BY r.updated_at DESC LIMIT ?`).all(...args, limit);
-  res.json({ releases: rows.map((r) => ({ id: r.id, title: r.title, type: r.type, status: r.status, createdBy: r.created_by, coverFilename: r.cover_filename, trackCount: r.track_count, releaseDate: r.release_date, createdAt: r.created_at, updatedAt: r.updated_at })) });
+  let query = supabaseAdmin.from("releases").select("*, release_tracks(id)").order("updated_at", { ascending: false }).limit(limit);
+  if (status) query = query.eq("status", status);
+  if (type) query = query.eq("type", type);
+  if (q) query = query.or(`title.ilike.%${q}%,created_by_username.ilike.%${q}%`);
+  const { data: rows } = await query;
+  res.json({ releases: (rows || []).map(r => ({
+    id: r.id, title: r.title, type: r.type, status: r.status,
+    createdBy: r.created_by_username || r.created_by,
+    coverUrl: r.cover_url || null,
+    trackCount: r.release_tracks?.length || 0,
+    releaseDate: r.release_date, createdAt: r.created_at, updatedAt: r.updated_at,
+  }))});
 });
 
-router.get("/releases/:id", (req, res) => {
-  const row = db.prepare("SELECT * FROM releases WHERE id = ?").get(req.params.id);
+router.get("/releases/:id", async (req, res) => {
+  const { data: row } = await supabaseAdmin.from("releases").select("*").eq("id", req.params.id).single();
   if (!row) return res.status(404).json({ error: "Không tìm thấy." });
-  const tracks = db.prepare(`SELECT rt.*, t.title, t.audio_filename, t.duration, t.lyrics, t.timed_lyrics, t.cover_filename, t.composer, t.play_count FROM release_tracks rt LEFT JOIN tracks t ON t.id = rt.track_id WHERE rt.release_id = ? ORDER BY rt.track_number ASC`).all(req.params.id);
-  res.json({ release: { ...shapeRelease(row), tracks: tracks.map((t) => ({ id: t.track_id, title: t.title, trackNumber: t.track_number, audioFilename: t.audio_filename, duration: t.duration, coverFilename: t.cover_filename, composer: t.composer, playCount: t.play_count })) } });
+  res.json({ release: await shapeRelease(row, { includeTracks: true }) });
 });
 
-router.post("/releases/:id/approve", adminActionLimit, (req, res) => {
-  const row = db.prepare("SELECT * FROM releases WHERE id = ?").get(req.params.id);
+router.post("/releases/:id/approve", adminActionLimit, async (req, res) => {
+  const { data: row } = await supabaseAdmin.from("releases").select("*").eq("id", req.params.id).single();
   if (!row) return res.status(404).json({ error: "Không tìm thấy." });
-  if (!['pending_review', 'under_review'].includes(row.status)) return res.status(409).json({ error: "Trạng thái không hợp lệ." });
-  const now = Date.now();
-  const releaseDate = row.release_date ? Date.parse(row.release_date) : 0;
-  const newStatus = releaseDate && releaseDate > now ? 'approved' : 'published';
-  db.prepare("UPDATE releases SET status = ?, reviewed_at = ?, reviewed_by = ?, updated_at = ? WHERE id = ?").run(newStatus, now, req.user.username, now, req.params.id);
-  recordAdminAudit(req.user.username, "release_approved", "release", req.params.id, { title: row.title, newStatus });
-  res.json({ release: shapeRelease(db.prepare("SELECT * FROM releases WHERE id = ?").get(req.params.id)) });
+  const now = new Date().toISOString();
+  await supabaseAdmin.from("releases").update({ status: "published", reviewed_at: now, reviewed_by: req.user.id, updated_at: now }).eq("id", req.params.id);
+  await recordAdminAudit(req.user.username, "release_approved", "release", req.params.id, { title: row.title });
+  const { data: updated } = await supabaseAdmin.from("releases").select("*").eq("id", req.params.id).single();
+  res.json({ release: await shapeRelease(updated) });
 });
 
-router.post("/releases/:id/reject", adminActionLimit, (req, res) => {
-  const row = db.prepare("SELECT * FROM releases WHERE id = ?").get(req.params.id);
+router.post("/releases/:id/reject", adminActionLimit, async (req, res) => {
+  const { data: row } = await supabaseAdmin.from("releases").select("*").eq("id", req.params.id).single();
   if (!row) return res.status(404).json({ error: "Không tìm thấy." });
-  if (!['pending_review', 'under_review'].includes(row.status)) return res.status(409).json({ error: "Trạng thái không hợp lệ." });
   const reason = ((req.body && req.body.reason) || "").trim().slice(0, 1000);
-  const now = Date.now();
-  db.prepare("UPDATE releases SET status = 'rejected', rejection_reason = ?, reviewed_at = ?, reviewed_by = ?, updated_at = ? WHERE id = ?").run(reason || null, now, req.user.username, now, req.params.id);
-  recordAdminAudit(req.user.username, "release_rejected", "release", req.params.id, { title: row.title, reason: reason || null });
-  res.json({ release: shapeRelease(db.prepare("SELECT * FROM releases WHERE id = ?").get(req.params.id)) });
+  const now = new Date().toISOString();
+  await supabaseAdmin.from("releases").update({ status: "rejected", rejection_reason: reason || null, reviewed_at: now, reviewed_by: req.user.id, updated_at: now }).eq("id", req.params.id);
+  await recordAdminAudit(req.user.username, "release_rejected", "release", req.params.id, { title: row.title, reason: reason || null });
+  const { data: updated } = await supabaseAdmin.from("releases").select("*").eq("id", req.params.id).single();
+  res.json({ release: await shapeRelease(updated) });
 });
 
-/* =============================== SETTINGS ================================ */
-// Only real, currently-enforced platform settings — never a fake toggle
-// (Part 54/63). submissionsPaused is actually checked in submissions.js.
-router.get("/settings", (req, res) => {
+// ======================== SETTINGS ========================
+router.get("/settings", async (req, res) => {
   res.json({
     settings: {
-      submissionsPaused: getSetting("submissionsPaused", false),
-      submissionsPausedMessage: getSetting("submissionsPausedMessage", ""),
+      submissionsPaused: await getSetting("submissionsPaused", false),
+      submissionsPausedMessage: await getSetting("submissionsPausedMessage", ""),
     },
   });
 });
 
-router.post("/settings", adminActionLimit, (req, res) => {
+router.post("/settings", adminActionLimit, async (req, res) => {
   const body = req.body || {};
   if (typeof body.submissionsPaused === "boolean") {
-    setSetting("submissionsPaused", body.submissionsPaused, req.user.username);
-    recordAdminAudit(req.user.username, body.submissionsPaused ? "submissions_paused" : "submissions_resumed", "platform_settings", "submissionsPaused", null);
+    await setSetting("submissionsPaused", body.submissionsPaused, req.user.username);
+    await recordAdminAudit(req.user.username, body.submissionsPaused ? "submissions_paused" : "submissions_resumed", "platform_settings", "submissionsPaused", null);
   }
   if (typeof body.submissionsPausedMessage === "string") {
-    setSetting("submissionsPausedMessage", body.submissionsPausedMessage.trim().slice(0, 300), req.user.username);
+    await setSetting("submissionsPausedMessage", body.submissionsPausedMessage.trim().slice(0, 300), req.user.username);
   }
   res.json({
     settings: {
-      submissionsPaused: getSetting("submissionsPaused", false),
-      submissionsPausedMessage: getSetting("submissionsPausedMessage", ""),
+      submissionsPaused: await getSetting("submissionsPaused", false),
+      submissionsPausedMessage: await getSetting("submissionsPausedMessage", ""),
     },
   });
 });
 
-/* =============================== AUDIT LOG =============================== */
-router.get("/audit-log", (req, res) => {
+// ======================== AUDIT LOG ========================
+router.get("/audit-log", async (req, res) => {
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
-  const rows = db.prepare("SELECT * FROM admin_audit_log ORDER BY created_at DESC LIMIT ?").all(limit);
-  res.json({ entries: rows.map(shapeAuditEntry) });
+  const { data: rows } = await supabaseAdmin
+    .from("admin_audit_log").select("*").order("created_at", { ascending: false }).limit(limit);
+  res.json({ entries: (rows || []).map(shapeAuditEntry) });
 });
 
-// ═══════════════════════════════════════════════════════════
-// ADMIN: Artist Applications
-// ═══════════════════════════════════════════════════════════
-
-router.get("/artist-applications", (req, res) => {
+// ======================== ARTIST APPLICATIONS ========================
+router.get("/artist-applications", async (req, res) => {
   const status = (req.query.status || "pending").trim();
-  const rows = status === "all"
-    ? db.prepare("SELECT * FROM artist_applications ORDER BY submitted_at DESC").all()
-    : db.prepare("SELECT * FROM artist_applications WHERE status = ? ORDER BY submitted_at ASC").all(status);
-  res.json({ applications: rows.map(shapeArtistApplication) });
+  let query = supabaseAdmin.from("artist_applications").select("*").order("submitted_at", { ascending: status !== "all" });
+  if (status !== "all") query = query.eq("status", status);
+  const { data: rows } = await query;
+  res.json({ applications: (rows || []).map(shapeArtistApplication) });
 });
 
-router.post("/artist-applications/:id/approve", (req, res) => {
+router.post("/artist-applications/:id/approve", async (req, res) => {
   try {
-    const app = db.prepare("SELECT * FROM artist_applications WHERE id = ?").get(req.params.id);
+    const { data: app } = await supabaseAdmin.from("artist_applications").select("*").eq("id", req.params.id).single();
     if (!app) return res.status(404).json({ error: "Không tìm thấy yêu cầu." });
     if (app.status !== "pending") return res.status(409).json({ error: "Yêu cầu đã được xử lý." });
-    const now = Date.now();
-    db.prepare("UPDATE artist_applications SET status = 'approved', reviewed_at = ?, reviewed_by = ? WHERE id = ?").run(now, req.user.username, req.params.id);
-    // Create artist profile (may fail if table doesn't exist yet — that's OK)
-    try {
-      const existingArtist = db.prepare("SELECT username FROM artist_profiles WHERE username = ?").get(app.username);
-      if (!existingArtist) {
-        db.prepare(`INSERT INTO artist_profiles (username, artist_name, bio, genres, links, verification_status, created_at) VALUES (?, ?, ?, ?, ?, 'independent', ?)`)
-          .run(app.username, app.artist_name, app.bio, JSON.stringify(app.main_genre ? [app.main_genre] : []), app.social_links, now);
+
+    const now = new Date().toISOString();
+    await supabaseAdmin.from("artist_applications").update({ status: "approved", reviewed_at: now, reviewed_by: req.user.id }).eq("id", req.params.id);
+
+    // Create artist profile if not exists
+    const { data: existingArtist } = await supabaseAdmin.from("artist_profiles").select("username").eq("username", app.username).maybeSingle();
+    if (!existingArtist) {
+      // Get the user_id from the application or find it from the profile
+      const { data: profile } = await supabaseAdmin.from("profiles").select("id").eq("username", app.username).maybeSingle();
+      if (profile) {
+        await supabaseAdmin.from("artist_profiles").insert({
+          user_id: profile.id, username: app.username, artist_name: app.artist_name,
+          bio: app.bio || "", genres: app.main_genre ? [app.main_genre] : [],
+          links: app.social_links || [], verification_status: "independent",
+          created_at: now, updated_at: now,
+        });
       }
-    } catch (e) { console.error("[APPROVE] artist_profiles insert failed:", e.message); }
-    // Use username to update — user_id may be a Supabase UUID (not in SQLite users table)
-    try { db.prepare("UPDATE users SET is_artist = 1 WHERE username = ?").run(app.username); } catch (e) { /* Supabase user not in SQLite, skip */ }
-    try { createNotification(app.username, "ARTIST_APPROVED", "Chào mừng bạn đến với 4ANG Artist", "Yêu cầu trở thành Nghệ sĩ của bạn đã được chấp thuận.", { actorUsername: req.user.username, targetType: "artist_application", targetId: app.id }); } catch (e) { /* table may not exist */ }
-    try { recordAdminAudit(req.user.username, "artist_application_approved", "artist_application", app.id, { artistName: app.artist_name, username: app.username }); } catch (e) { /* table may not exist */ }
-    const updated = db.prepare("SELECT * FROM artist_applications WHERE id = ?").get(req.params.id);
+    }
+
+    await supabaseAdmin.from("profiles").update({ role: "artist" }).eq("username", app.username);
+
+    try {
+      await createNotification(app.username, "ARTIST_APPROVED", "Chào mừng bạn đến với 4ANG Artist",
+        "Yêu cầu trở thành Nghệ sĩ của bạn đã được chấp thuận.",
+        { actorUsername: req.user.username, targetType: "artist_application", targetId: app.id });
+    } catch (e) { console.error("[approve notification]", e.message); }
+
+    await recordAdminAudit(req.user.username, "artist_application_approved", "artist_application", app.id, { artistName: app.artist_name, username: app.username });
+    const { data: updated } = await supabaseAdmin.from("artist_applications").select("*").eq("id", req.params.id).single();
     res.json({ application: shapeArtistApplication(updated) });
   } catch (e) {
     console.error("[APPROVE ERROR]", e);
@@ -466,17 +385,20 @@ router.post("/artist-applications/:id/approve", (req, res) => {
   }
 });
 
-router.post("/artist-applications/:id/reject", (req, res) => {
+router.post("/artist-applications/:id/reject", async (req, res) => {
   try {
-    const app = db.prepare("SELECT * FROM artist_applications WHERE id = ?").get(req.params.id);
+    const { data: app } = await supabaseAdmin.from("artist_applications").select("*").eq("id", req.params.id).single();
     if (!app) return res.status(404).json({ error: "Không tìm thấy yêu cầu." });
     if (app.status !== "pending") return res.status(409).json({ error: "Yêu cầu đã được xử lý." });
     const note = ((req.body && req.body.note) || "").trim().slice(0, 500);
-    const now = Date.now();
-    db.prepare("UPDATE artist_applications SET status = 'rejected', review_note = ?, reviewed_at = ?, reviewed_by = ? WHERE id = ?").run(note || null, now, req.user.username, req.params.id);
-    try { createNotification(app.username, "ARTIST_REJECTED", "Yêu cầu chưa được chấp thuận", "Vui lòng xem chi tiết trong hồ sơ.", { actorUsername: req.user.username, targetType: "artist_application", targetId: app.id }); } catch (e) { /* table may not exist */ }
-    try { recordAdminAudit(req.user.username, "artist_application_rejected", "artist_application", app.id, { note: note || null }); } catch (e) { /* table may not exist */ }
-    const updated = db.prepare("SELECT * FROM artist_applications WHERE id = ?").get(req.params.id);
+    const now = new Date().toISOString();
+    await supabaseAdmin.from("artist_applications").update({ status: "rejected", review_note: note || null, reviewed_at: now, reviewed_by: req.user.id }).eq("id", req.params.id);
+    try {
+      await createNotification(app.username, "ARTIST_REJECTED", "Yêu cầu chưa được chấp thuận", "Vui lòng xem chi tiết trong hồ sơ.",
+        { actorUsername: req.user.username, targetType: "artist_application", targetId: app.id });
+    } catch (e) { console.error("[reject notification]", e.message); }
+    await recordAdminAudit(req.user.username, "artist_application_rejected", "artist_application", app.id, { note: note || null });
+    const { data: updated } = await supabaseAdmin.from("artist_applications").select("*").eq("id", req.params.id).single();
     res.json({ application: shapeArtistApplication(updated) });
   } catch (e) {
     console.error("[REJECT ERROR]", e);
