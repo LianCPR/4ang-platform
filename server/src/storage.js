@@ -68,7 +68,7 @@ export const MAX_VIDEO_BYTES = 150 * 1024 * 1024;   // 150 MB
  * @returns {{ path: string, url: string, publicUrl?: string }}
  */
 export async function uploadFile(bucket, userId, buffer, mimeType, originalName) {
-  const ext = extForMime(mime, getWhitelist(bucket)) || path.extname(originalName) || "";
+  const ext = extForMime(mimeType, getWhitelist(bucket)) || path.extname(originalName) || "";
   const filename = `${randomUUID()}${ext}`;
   const filePath = `${userId}/${filename}`;
 
