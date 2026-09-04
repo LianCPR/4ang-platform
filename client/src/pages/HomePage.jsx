@@ -6,6 +6,7 @@ import { greeting, gradientFor, hashHue } from "../lib/format";
 import TrackCard from "../components/TrackCard";
 import { api } from "../api";
 import SmartMixRail from "../components/SmartMixRail";
+import ErrorState from "../components/ErrorState";
 
 /* ─── Fade-in section wrapper ──────────────────────────────── */
 function FadeSection({ children, delay = 0, className = "" }) {
@@ -155,8 +156,11 @@ export default function HomePage({
 
   // Genres from API (show all available genres, not just from tracks)
   const [apiGenres, setApiGenres] = useState([]);
+  const [genresError, setGenresError] = useState(null);
   useEffect(() => {
-    api.discoverGenres().then((d) => setApiGenres(d.genres || [])).catch(() => {});
+    api.discoverGenres()
+      .then((d) => { setApiGenres(d.genres || []); setGenresError(null); })
+      .catch((e) => { setGenresError(e.message); });
   }, []);
   const allGenres = useMemo(() => {
     if (apiGenres.length > 0) return apiGenres.map((g) => g.name || g);
@@ -395,6 +399,11 @@ export default function HomePage({
               <button key={g} type="button" className="genre-chip">{g}</button>
             ))}
           </div>
+          {genresError && (
+            <ErrorState message="Không thể tải thể loại." compact onRetry={() => {
+              api.discoverGenres().then((d) => { setApiGenres(d.genres || []); setGenresError(null); }).catch((e) => { setGenresError(e.message); });
+            }} />
+          )}
         </FadeSection>
       )}
 

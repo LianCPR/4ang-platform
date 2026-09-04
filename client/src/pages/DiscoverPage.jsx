@@ -4,6 +4,7 @@ import { Music, Users, Play, Clock, TrendingUp, Sparkles, Headphones, ChevronRig
 import { api } from "../api";
 import { Butterfly, Flower, Vine, RoseCluster, Petal } from "../assets/Botanical";
 import { gradientFor, hashHue, formatTime } from "../lib/format";
+import ErrorState from "../components/ErrorState";
 
 /* ─── Fade-in section ─────────────────────────── */
 function Section({ children, delay = 0, className = "" }) {
@@ -130,35 +131,47 @@ export default function DiscoverPage({
   const [recommendations, setRecommendations] = useState([]);
   const [becauseYouListened, setBecauseYouListened] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   const quickPickRef = useRef(null);
   const newReleaseRef = useRef(null);
 
+  async function load() {
+    setLoading(true);
+    setError(null);
+    const results = {};
+    const failures = [];
+    const fetches = [
+      ["trending", api.trending(10)],
+      ["newReleases", api.newReleases(12)],
+      ["risingArtists", api.risingArtists(10)],
+      ["genres", api.discoverGenres()],
+      ["recommendations", api.recommendations(10)],
+      ["becauseYouListened", api.becauseYouListened(8)],
+    ];
+    await Promise.allSettled(
+      fetches.map(([key, promise]) =>
+        promise
+          .then((data) => { results[key] = data; })
+          .catch((e) => { failures.push({ key, error: e }); })
+      )
+    );
+    setTrending(results.trending?.tracks || []);
+    setNewReleases(results.newReleases?.tracks || []);
+    setRisingArtists(results.risingArtists?.artists || []);
+    setGenres(results.genres?.genres || []);
+    setRecommendations(results.recommendations?.tracks || []);
+    setBecauseYouListened(results.becauseYouListened?.tracks || []);
+    // Show error only if ALL API calls failed and no parent fallback data
+    if (failures.length === fetches.length && tracks.length === 0) {
+      setError(failures[0]?.error?.message || "Không thể tải dữ liệu khám phá.");
+    }
+    setLoading(false);
+  }
+
   useEffect(() => {
     let cancelled = false;
-    async function load() {
-      setLoading(true);
-      try {
-        const [t, nr, ra, g, rec, byl] = await Promise.all([
-          api.trending(10).catch(() => ({ tracks: [] })),
-          api.newReleases(12).catch(() => ({ tracks: [] })),
-          api.risingArtists(10).catch(() => ({ artists: [] })),
-          api.discoverGenres().catch(() => ({ genres: [] })),
-          api.recommendations(10).catch(() => ({ tracks: [] })),
-          api.becauseYouListened(8).catch(() => ({ tracks: [] })),
-        ]);
-        if (!cancelled) {
-          setTrending(t.tracks || []);
-          setNewReleases(nr.tracks || []);
-          setRisingArtists(ra.artists || []);
-          setGenres(g.genres || []);
-          setRecommendations(rec.tracks || []);
-          setBecauseYouListened(byl.tracks || []);
-        }
-      } catch { /* ignore */ }
-      if (!cancelled) setLoading(false);
-    }
-    load();
+    load().then(() => {});
     return () => { cancelled = true; };
   }, []);
 
@@ -209,6 +222,15 @@ export default function DiscoverPage({
         <SkeletonCards count={6} />
         <SkeletonList count={5} />
         <SkeletonCards count={4} />
+      </section>
+    );
+  }
+
+  /* ═══════════ ERROR STATE ═══════════ */
+  if (error) {
+    return (
+      <section className="disc-page">
+        <ErrorState message={error} onRetry={load} />
       </section>
     );
   }

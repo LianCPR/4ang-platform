@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { api } from "../api";
 import TrackCard from "../components/TrackCard";
+import ErrorState from "../components/ErrorState";
 import { gradientFor, hashHue, formatTime } from "../lib/format";
 
 /* ─── Tab config ─────────────────────────── */
@@ -103,25 +104,29 @@ export default function LibraryPage({
   const [myPlaylists, setMyPlaylists] = useState([]);
   const [continueListening, setContinueListening] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   useEffect(() => { loadData(); }, []);
 
   async function loadData() {
     setLoading(true);
+    setError(null);
     try {
       const [liked, recent, artists, playlists, cont] = await Promise.all([
-        api.likedTracks(50).catch(() => ({ tracks: [] })),
-        api.recentlyPlayed(30).catch(() => ({ tracks: [] })),
-        api.followedArtists(30).catch(() => ({ artists: [] })),
-        api.myPlaylists().catch(() => ({ playlists: [] })),
-        api.continueListening(10).catch(() => ({ tracks: [] })),
+        api.likedTracks(50).catch((e) => { throw e; }),
+        api.recentlyPlayed(30).catch((e) => { throw e; }),
+        api.followedArtists(30).catch((e) => { throw e; }),
+        api.myPlaylists().catch((e) => { throw e; }),
+        api.continueListening(10).catch((e) => { throw e; }),
       ]);
       setLikedTracks(liked.tracks || []);
       setRecentTracks(recent.tracks || []);
       setFollowedArtists(artists.artists || []);
       setMyPlaylists(playlists.playlists || []);
       setContinueListening(cont.tracks || []);
-    } catch (e) { /* ignore */ }
+    } catch (e) {
+      setError(e.message || "Không thể tải dữ liệu thư viện.");
+    }
     setLoading(false);
   }
 
@@ -165,6 +170,18 @@ export default function LibraryPage({
             <div key={i} className="lib-skeleton-card" style={{ animationDelay: `${i * 0.05}s` }} />
           ))}
         </div>
+      </div>
+    );
+  }
+
+  /* ── Error ── */
+  if (error) {
+    return (
+      <div className="lib-page">
+        <div className="lib-header">
+          <h1 className="lib-title">Thư viện</h1>
+        </div>
+        <ErrorState message={error} onRetry={loadData} />
       </div>
     );
   }

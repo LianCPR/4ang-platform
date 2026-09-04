@@ -106,6 +106,29 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-top: env(safe-area-inset-top, 0px);
 
+  /* ── Z-index scale ── */
+  --z-base: 0;
+  --z-dropdown: 100;
+  --z-sticky: 200;
+  --z-overlay: 300;
+  --z-modal: 400;
+  --z-sheet: 500;
+  --z-toast: 600;
+  --z-tooltip: 700;
+
+  /* ── Breakpoints (reference only — use in @media) ── */
+  /* --bp-sm: 480px;  */
+  /* --bp-md: 640px;  */
+  /* --bp-lg: 900px;  */
+  /* --bp-xl: 1200px; */
+  /* --bp-2xl: 1600px; */
+
+  /* ── Aspect ratios ── */
+  --ar-square: 1;
+  --ar-portrait: 3/4;
+  --ar-landscape: 4/3;
+  --ar-wide: 16/9;
+
   /* ── Ambient artwork atmosphere (warm defaults) ── */
   --ambient-a: 154, 166, 138;
   --ambient-b: 216, 180, 106;

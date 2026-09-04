@@ -91,6 +91,8 @@ export default function App() {
   const [shuffleOrder, setShuffleOrder] = useState([]);
   const shuffledQueueRef = useRef([]);
   const sleepTimerRef = useRef(null);
+  const savedPositionRef = useRef(null);
+  const [crossfadeDuration, setCrossfadeDuration] = useState(() => lsGet("player_crossfade", 0));
 
   // Phase 8 new state
   const [viewingPlaylist, setViewingPlaylist] = useState(null);
@@ -327,31 +329,63 @@ export default function App() {
       setPlaybackHistory((h) => [...h, current.trackId].slice(-50));
     }
     const audio = audioRef.current;
-    audio.src = audioSrcFor(track);
-    audio.currentTime = 0; audio.volume = volume / 100; audio.play();
-    setQueue(list); setQueueIndex(index);
-    setCurrent({
-      trackId: track.id, title: track.title,
-      artist: (track.credits && track.credits[0] && track.credits[0].artistName) || track.composer || track.uploaderDisplayName,
-      hue: hashHue(track.title), thumb: track.coverUrl || null, source: "local",
-    });
-    setRecentlyPlayed((ids) => {
-      const next = [track.id, ...ids.filter((id) => id !== track.id)].slice(0, 12);
-      lsSet("recently_played", next);
-      return next;
-    });
-    // Regenerate shuffle order if shuffle is on
-    if (shuffleEnabled && list.length > 1) {
-      const indices = list.map((_, i) => i).filter((i) => i !== index);
-      for (let i = indices.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [indices[i], indices[j]] = [indices[j], indices[i]];
+    const startPos = savedPositionRef.current || 0;
+    savedPositionRef.current = null;
+    const doSwitch = () => {
+      audio.src = audioSrcFor(track);
+      audio.currentTime = startPos;
+      audio.volume = volume / 100;
+      audio.play();
+      setQueue(list); setQueueIndex(index);
+      setCurrent({
+        trackId: track.id, title: track.title,
+        artist: (track.credits && track.credits[0] && track.credits[0].artistName) || track.composer || track.uploaderDisplayName,
+        hue: hashHue(track.title), thumb: track.coverUrl || null, source: "local",
+      });
+      setRecentlyPlayed((ids) => {
+        const next = [track.id, ...ids.filter((id) => id !== track.id)].slice(0, 12);
+        lsSet("recently_played", next);
+        return next;
+      });
+      if (shuffleEnabled && list.length > 1) {
+        const indices = list.map((_, i) => i).filter((i) => i !== index);
+        for (let i = indices.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [indices[i], indices[j]] = [indices[j], indices[i]];
+        }
+        indices.unshift(index);
+        setShuffleOrder(indices);
+        shuffledQueueRef.current = indices;
       }
-      indices.unshift(index);
-      setShuffleOrder(indices);
-      shuffledQueueRef.current = indices;
+      api.play(track.id).then(({ track: updated }) => mergeTrackIntoLists(updated)).catch(() => {});
+    };
+    // Crossfade: fade out current → switch source → fade in
+    if (crossfadeDuration > 0 && !audio.paused && audio.currentTime > 0) {
+      const fadeMs = Math.min(crossfadeDuration * 1000, 8000);
+      const steps = 20;
+      const stepMs = fadeMs / steps;
+      const startVol = audio.volume;
+      let step = 0;
+      const fadeOut = setInterval(() => {
+        step++;
+        audio.volume = startVol * (1 - step / steps);
+        if (step >= steps) {
+          clearInterval(fadeOut);
+          doSwitch();
+          // Fade in
+          const targetVol = volume / 100;
+          audio.volume = 0;
+          let fadeInStep = 0;
+          const fadeIn = setInterval(() => {
+            fadeInStep++;
+            audio.volume = targetVol * (fadeInStep / steps);
+            if (fadeInStep >= steps) { clearInterval(fadeIn); audio.volume = targetVol; }
+          }, stepMs);
+        }
+      }, stepMs);
+    } else {
+      doSwitch();
     }
-    api.play(track.id).then(({ track: updated }) => mergeTrackIntoLists(updated)).catch(() => {});
   }
   function loadYTAPI() {
     if (ytApiPromiseRef.current) return ytApiPromiseRef.current;
@@ -490,6 +524,21 @@ export default function App() {
     setRepeatMode(next);
     lsSet("player_repeat", next);
   }
+  function handleSetCrossfade(v) {
+    setCrossfadeDuration(v);
+    lsSet("player_crossfade", v);
+  }
+  function toggleMute() {
+    if (volume > 0) {
+      lsSet("player_volume_before_mute", volume);
+      handleVolume(0);
+    } else {
+      handleVolume(lsGet("player_volume_before_mute", 80));
+    }
+  }
+  function likeCurrentTrack() {
+    if (current && current.trackId) toggleLike(current.trackId);
+  }
 
   useEffect(() => {
     const a = audioRef.current;
@@ -555,6 +604,60 @@ export default function App() {
     resolveAmbient(current).then((pair) => { if (!cancelled) applyAmbient(pair); });
     return () => { cancelled = true; };
   }, [current?.trackId]);
+
+  /* ---- Playback persistence: save state to localStorage ---- */
+  useEffect(() => {
+    if (!current) return;
+    lsSet("player_current", { trackId: current.trackId, title: current.title, artist: current.artist, hue: current.hue, thumb: current.thumb, source: current.source });
+    lsSet("player_queue_ids", queue.map((t) => t.id));
+    lsSet("player_queue_index", queueIndex);
+  }, [current, queue, queueIndex]);
+  useEffect(() => {
+    if (progress.cur > 0 && progress.dur > 5 && current) {
+      lsSet("player_position", { trackId: current.trackId, position: progress.cur });
+    }
+  }, [progress.cur]);
+
+  /* ---- Playback persistence: restore on mount ---- */
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current || !tracksReady || tracks.length === 0) return;
+    restoredRef.current = true;
+    const saved = lsGet("player_current");
+    const savedQueueIds = lsGet("player_queue_ids", []);
+    const savedIndex = lsGet("player_queue_index", 0);
+    const savedPos = lsGet("player_position");
+    if (!saved || !saved.trackId) return;
+    // Find the current track in allKnownTracks
+    const allTracks = [...tracks];
+    const trackObj = allTracks.find((t) => t.id === saved.trackId);
+    if (!trackObj) return;
+    // Restore queue: look up track objects by saved IDs
+    let restoredQueue = savedQueueIds.map((id) => allTracks.find((t) => t.id === id)).filter(Boolean);
+    if (restoredQueue.length === 0) restoredQueue = [trackObj];
+    // Ensure saved track is in queue
+    if (!restoredQueue.find((t) => t.id === saved.trackId)) {
+      restoredQueue.unshift(trackObj);
+    }
+    const restoredIndex = Math.min(savedIndex, restoredQueue.length - 1);
+    // Set state
+    setCurrent(saved);
+    setQueue(restoredQueue);
+    setQueueIndex(restoredIndex);
+    if (savedPos && savedPos.trackId === saved.trackId && savedPos.position > 0) {
+      savedPositionRef.current = savedPos.position;
+    }
+    // Start playback after a tick so audio element is ready
+    setTimeout(() => {
+      const audio = audioRef.current;
+      if (!audio) return;
+      audio.src = audioSrcFor(trackObj);
+      audio.volume = volume / 100;
+      audio.currentTime = savedPos && savedPos.trackId === saved.trackId ? savedPos.position : 0;
+      audio.play().catch(() => {});
+      setIsPlaying(true);
+    }, 100);
+  }, [tracksReady, tracks.length]);
 
   /* Media Session API — system-level now-playing controls */
   useEffect(() => {
@@ -652,15 +755,42 @@ export default function App() {
   useEffect(() => {
     function onKey(e) {
       // Don't capture when typing in inputs
-      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
-      if (e.code === "Space" && current) {
-        e.preventDefault();
-        togglePlayPause();
+      const tag = e.target.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.target.isContentEditable) return;
+      switch (e.code) {
+        case "Space":
+          if (current) { e.preventDefault(); togglePlayPause(); }
+          break;
+        case "ArrowRight":
+          if (current && e.shiftKey) { e.preventDefault(); handleNext(); }
+          else if (current) { e.preventDefault(); handleSeek(Math.min(1000, Math.round((progress.cur + 10) / Math.max(progress.dur, 1) * 1000))); }
+          break;
+        case "ArrowLeft":
+          if (current && e.shiftKey) { e.preventDefault(); handlePrev(); }
+          else if (current) { e.preventDefault(); handleSeek(Math.max(0, Math.round((progress.cur - 10) / Math.max(progress.dur, 1) * 1000))); }
+          break;
+        case "ArrowUp":
+          e.preventDefault(); handleVolume(Math.min(100, volume + 5));
+          break;
+        case "ArrowDown":
+          e.preventDefault(); handleVolume(Math.max(0, volume - 5));
+          break;
+        case "KeyM":
+          e.preventDefault(); toggleMute();
+          break;
+        case "KeyL":
+          e.preventDefault(); likeCurrentTrack();
+          break;
+        case "KeyS":
+          e.preventDefault(); toggleShuffle();
+          break;
+        default:
+          break;
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [current, togglePlayPause]);
+  }, [current, togglePlayPause, volume]);
 
   if (!authReady || !tracksReady) {
     return <LoadingScreen />;
