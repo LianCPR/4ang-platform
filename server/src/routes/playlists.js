@@ -7,7 +7,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { shapePlaylist, shapePlaylistDetail, recordActivity } from "../db.js";
+import { shapePlaylist, shapePlaylistDetail, recordActivity, resolveUrl } from "../db.js";
 import { requireAuth, optionalAuth } from "../auth.js";
 import { supabaseAdmin } from "../supabase.js";
 
@@ -30,6 +30,49 @@ const coverUpload = multer({
 
 const router = express.Router();
 
+// Public playlist listing
+router.get("/", optionalAuth, async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 20, 50);
+  const { data: rows } = await supabaseAdmin
+    .from("playlists").select("*").eq("is_public", true)
+    .order("updated_at", { ascending: false }).limit(limit);
+  const playlists = await Promise.all((rows || []).map(shapePlaylist));
+  res.json({ playlists });
+});
+
+// Liked songs as a virtual playlist
+router.get("/liked", requireAuth, async (req, res) => {
+  const { data: liked } = await supabaseAdmin
+    .from("track_likes").select("track_id").eq("username", req.user.username).order("created_at", { ascending: false });
+  const trackIds = (liked || []).map(l => l.track_id);
+  let tracks = [];
+  if (trackIds.length) {
+    const { data: rows } = await supabaseAdmin.from("tracks").select("*").in("id", trackIds);
+    tracks = (rows || []);
+  }
+  res.json({
+    playlist: {
+      id: "liked-songs",
+      title: "Bài hát đã thích",
+      description: null,
+      coverUrl: null,
+      ownerUsername: req.user.username,
+      isPublic: false,
+      trackCount: tracks.length,
+      tracks: tracks.map(t => ({
+        id: t.id, title: t.title, composer: t.composer || "",
+        audioUrl: t.audio_path || null,
+        coverUrl: resolveUrl("artwork", t.cover_path || null),
+        genres: t.genres || [],
+        playCount: t.play_count || 0,
+        status: t.status,
+        createdAt: typeof t.created_at === 'string' ? new Date(t.created_at).getTime() : t.created_at,
+      })),
+    }
+  });
+});
+
+// User's own playlists
 router.get("/mine", requireAuth, async (req, res) => {
   const { data: rows } = await supabaseAdmin
     .from("playlists").select("*").eq("owner_username", req.user.username).order("updated_at", { ascending: false });

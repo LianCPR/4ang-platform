@@ -123,7 +123,7 @@ router.get("/me/stats", requireAuth, async (req, res) => {
   const submissionMap = {};
   for (const s of (submissions || [])) submissionMap[s.status] = (submissionMap[s.status] || 0) + 1;
 
-  res.json({ ...stats, submissions: submissionMap, trackPlayHistory: [], dailyPlays: [] });
+  res.json({ ...stats, submissions: submissionMap, trackPlayHistory: [], dailyPlays: [], verificationStatus: row.verification_status || 'independent', badge: row.badge_type || null });
 });
 
 // Update artist profile

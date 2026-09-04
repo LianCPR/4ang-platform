@@ -41,7 +41,7 @@ router.get("/:id/audio", optionalAuth, async (req, res) => {
     const isOwner = req.user && req.user.username === row.uploader_username;
     const isAdmin = req.user && req.user.isAdmin;
     if (row.status !== "approved" && !isOwner && !isAdmin) return res.status(403).end();
-    const filePath = row.audio_path || row.audio_filename;
+    const filePath = row.audio_path;
     if (!filePath) return res.status(404).end();
     const url = await getFileUrl("audio", filePath);
     if (!url) return res.status(404).end();
@@ -56,11 +56,11 @@ router.get("/:id/audio", optionalAuth, async (req, res) => {
 router.get("/:id/video", optionalAuth, async (req, res) => {
   try {
     const { data: row } = await supabaseAdmin.from("tracks").select("*").eq("id", req.params.id).single();
-    if (!row || !(row.video_path || row.video_filename)) return res.status(404).end();
+    if (!row || !row.video_path) return res.status(404).end();
     const isOwner = req.user && req.user.username === row.uploader_username;
     const isAdmin = req.user && req.user.isAdmin;
     if (row.status !== "approved" && !isOwner && !isAdmin) return res.status(403).end();
-    const filePath = row.video_path || row.video_filename;
+    const filePath = row.video_path;
     const url = await getFileUrl("videos", filePath);
     if (!url) return res.status(404).end();
     res.redirect(url);

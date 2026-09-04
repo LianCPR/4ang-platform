@@ -31,7 +31,7 @@ async function uploadToStorage(req, fieldName, bucket) {
   const file = req.files?.[fieldName]?.[0];
   if (!file) return null;
   const result = await uploadFile(bucket, req.user.username, file.buffer, file.mimetype, file.originalname);
-  return result.path;
+  return { path: result.path, url: result.url || result.publicUrl || null };
 }
 
 function friendlyMulterError(err) {
@@ -194,9 +194,9 @@ router.post("/", requireAuth, requireArtistMiddleware, rateLimit({ windowMs: 60_
         if (dupeCount > 0) return res.status(409).json({ error: "Bạn đã gửi file nhạc này trong một yêu cầu khác rồi." });
       }
 
-      const audioPath = audioFile ? await uploadToStorage(req, "audio", "audio") : null;
-      const coverPath = coverFile ? await uploadToStorage(req, "cover", "artwork") : null;
-      const videoPath = videoFile ? await uploadToStorage(req, "video", "videos") : null;
+      const audioResult = audioFile ? await uploadToStorage(req, "audio", "audio") : null;
+      const coverResult = coverFile ? await uploadToStorage(req, "cover", "artwork") : null;
+      const videoResult = videoFile ? await uploadToStorage(req, "video", "videos") : null;
 
       const now = new Date().toISOString();
       const status = action === "submit" ? "pending_review" : "draft";
@@ -204,8 +204,8 @@ router.post("/", requireAuth, requireArtistMiddleware, rateLimit({ windowMs: 60_
       const { data: sub, error: insertErr } = await supabaseAdmin.from("submissions").insert({
         id: randomUUID(), artist_username: req.user.username, artist_id: req.artist.user_id,
         title: f.title, release_type: "single",
-        audio_path: audioPath, audio_original_name: audioFile?.originalname || null, audio_checksum: audioChecksum,
-        cover_path: coverPath, video_path: videoPath,
+        audio_path: audioResult?.path || null, audio_original_name: audioFile?.originalname || null, audio_checksum: audioChecksum,
+        cover_path: coverResult?.path || null, video_path: videoResult?.path || null,
         lyrics: f.lyrics.trim(), genres: genreResult.value, language: f.language || null,
         is_explicit: f.isExplicit, release_date: f.releaseDate || null,
         rights_confirmed: f.rightsConfirmed, terms_accepted: f.termsAccepted,

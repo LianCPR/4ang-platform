@@ -4,7 +4,7 @@ import {
   ArrowLeft, Disc3, TrendingUp, Users, Music, Eye, Plus, Search, Filter, Clock,
   CheckCircle, XCircle, AlertCircle, MoreHorizontal, Play, Edit3, Trash2, Send,
   BarChart3, FileText, Heart, Bookmark, Activity, Calendar, LayoutDashboard,
-  Upload, Settings, ExternalLink, Mic2, Headphones, Home
+  Upload, Settings, ExternalLink, Mic2, Headphones, Home, ShieldCheck
 } from "lucide-react";
 import { api } from "../api";
 import { gradientFor, hashHue, formatTime, timeAgo } from "../lib/format";
@@ -138,6 +138,8 @@ export default function ArtistDashboardPage({ session, showToast, onClose, onOpe
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
+  const [verificationBusy, setVerificationBusy] = useState(false);
+  const [verificationStatus, setVerificationStatus] = useState(null);
 
   useEffect(() => { loadData(); }, []);
 
@@ -148,7 +150,7 @@ export default function ArtistDashboardPage({ session, showToast, onClose, onOpe
         api.artistStats().catch(() => null),
         api.mySubmissions().catch(() => ({ submissions: [] })),
       ]);
-      if (statsRes) setStats(statsRes);
+      if (statsRes) { setStats(statsRes); if (statsRes.verificationStatus) setVerificationStatus(statsRes.verificationStatus); }
       setSubmissions(subsRes.submissions || []);
     } catch (e) { /* ignore */ }
     setLoading(false);
@@ -235,6 +237,27 @@ export default function ArtistDashboardPage({ session, showToast, onClose, onOpe
             <ExternalLink size={16} />
             <span>Hồ sơ công khai</span>
           </button>
+          {verificationStatus !== 'pending' && verificationStatus !== 'verified' && (
+            <button type="button" className="dash-sidebar-item" onClick={async () => {
+              if (verificationBusy) return;
+              setVerificationBusy(true);
+              try {
+                await api.requestVerification();
+                setVerificationStatus('pending');
+                showToast('Đã gửi yêu cầu xác minh. Đang chờ 4ANG xem xét.');
+              } catch (e) { showToast(e.message); }
+              setVerificationBusy(false);
+            }} disabled={verificationBusy}>
+              <ShieldCheck size={16} />
+              <span>{verificationBusy ? 'Đang gửi...' : 'Yêu cầu xác minh nghệ sĩ'}</span>
+            </button>
+          )}
+          {verificationStatus === 'pending' && (
+            <div className="dash-sidebar-item" style={{ cursor: 'default', opacity: 0.6 }}>
+              <Clock size={16} />
+              <span>Đang chờ xác minh</span>
+            </div>
+          )}
           <button type="button" className="dash-sidebar-item" onClick={onClose}>
             <Home size={16} />
             <span>Về 4ANG</span>

@@ -2,7 +2,7 @@
  * 4ANG Library Routes — Supabase PostgreSQL only.
  */
 import express from "express";
-import { shapeTrack, shapeArtistProfile } from "../db.js";
+import { shapeTrack, shapeArtistProfile, resolveUrl } from "../db.js";
 import { requireAuth } from "../auth.js";
 import { supabaseAdmin } from "../supabase.js";
 import { normalizeSearch, removeDiacritics } from "../lib/normalize.js";
@@ -155,11 +155,11 @@ router.post("/progress", requireAuth, async (req, res) => {
 router.get("/continue-listening", requireAuth, async (req, res) => {
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 30);
   const { data: rows } = await supabaseAdmin
-    .from("listening_progress").select("*, tracks(title, composer, cover_url, cover_filename)")
+    .from("listening_progress").select("*, tracks(title, composer, cover_path)")
     .eq("username", req.user.username).order("updated_at", { ascending: false }).limit(limit);
   const tracks = (rows || []).filter(r => r.tracks).map(r => ({
     id: r.track_id, title: r.tracks.title, artistName: r.tracks.composer || "",
-    coverUrl: r.tracks.cover_url || null,
+    coverUrl: resolveUrl("artwork", r.tracks.cover_path || null),
     progressSeconds: r.progress_seconds, durationSeconds: r.duration_seconds, lastUpdated: r.updated_at,
   }));
   res.json({ tracks });

@@ -35,7 +35,7 @@ async function signedUrl(bucket, path) {
   return data?.signedUrl || null;
 }
 
-function resolveUrl(bucket, filePath) {
+export function resolveUrl(bucket, filePath) {
   if (!filePath) return null;
   if (filePath.startsWith("http")) return filePath;
   // Public buckets: artwork, avatars
@@ -143,8 +143,8 @@ export function shapeArtistProfile(row, extra = {}) {
     username: row.username,
     artistName: row.artist_name,
     bio: row.bio || "",
-    avatarUrl: row.avatar_url || (row.avatar_filename ? resolveUrl("avatars", row.avatar_filename) : null),
-    coverUrl: row.cover_url || (row.cover_filename ? resolveUrl("artwork", row.cover_filename) : null),
+    avatarUrl: resolveUrl("avatars", row.avatar_url || null),
+    coverUrl: resolveUrl("artwork", row.cover_url || null),
     genres: typeof row.genres === "string" ? JSON.parse(row.genres || "[]") : (row.genres || []),
     links: typeof row.links === "string" ? JSON.parse(row.links || "[]") : (row.links || []),
     verificationStatus: row.verification_status,
@@ -227,8 +227,8 @@ export async function shapeTrack(row) {
     savedBy,
     comments,
     audioUrl: `/api/tracks/${row.id}/audio`,
-    coverUrl: row.cover_url || (row.cover_filename ? resolveUrl("artwork", row.cover_filename) : null),
-    videoUrl: row.video_path || row.video_filename ? `/api/tracks/${row.id}/video` : null,
+    coverUrl: resolveUrl("artwork", row.cover_path || row.cover_url || null),
+    videoUrl: row.video_path ? `/api/tracks/${row.id}/video` : null,
     credits,
     primaryArtistName: primary ? primary.artistName : "",
     primaryArtistUsername: primary ? primary.artistUsername : null,
@@ -301,9 +301,9 @@ export async function shapeSubmission(row, { includeEvents = false } = {}) {
     title: row.title,
     releaseType: row.release_type,
     audioOriginalName: row.audio_original_name || null,
-    hasAudio: !!(row.audio_path || row.audio_filename),
-    coverUrl: row.cover_url || (row.cover_filename ? resolveUrl("artwork", row.cover_filename) : null),
-    hasVideo: !!(row.video_path || row.video_filename),
+    hasAudio: !!row.audio_path,
+    coverUrl: resolveUrl("artwork", row.cover_path || row.cover_url || null),
+    hasVideo: !!row.video_path,
     lyrics: row.lyrics || "",
     genres: typeof row.genres === "string" ? JSON.parse(row.genres || "[]") : (row.genres || []),
     language: row.language || "",
@@ -344,8 +344,8 @@ export async function shapePlaylist(row) {
     ownerDisplayName,
     title: row.title,
     description: row.description || "",
-    coverUrl: row.cover_url || (row.cover_filename ? resolveUrl("artwork", row.cover_filename) : null),
-    isPublic: row.is_public ?? row.is_public ?? true,
+    coverUrl: resolveUrl("artwork", row.cover_url || null),
+    isPublic: row.is_public ?? true,
     trackCount: row.track_count || 0,
     createdAt: typeof row.created_at === "number" ? row.created_at : new Date(row.created_at).getTime(),
     updatedAt: typeof row.updated_at === "number" ? row.updated_at : new Date(row.updated_at).getTime(),
@@ -504,7 +504,7 @@ export async function shapeRelease(row, { includeTracks = false } = {}) {
     title: row.title,
     slug: row.slug || null,
     type: row.type,
-    coverUrl: row.cover_url || (row.cover_filename ? resolveUrl("artwork", row.cover_filename) : null),
+    coverUrl: resolveUrl("artwork", row.cover_url || null),
     description: row.description || "",
     artistMessage: row.artist_message || "",
     releaseDate: row.release_date || null,
