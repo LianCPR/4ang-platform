@@ -3,10 +3,12 @@
  * Removed all legacy SQLite paths.
  */
 import express from "express";
+import multer from "multer";
 import { randomUUID, randomInt } from "node:crypto";
 import { signToken, requireAuth } from "../auth.js";
 import { rateLimit } from "../rateLimit.js";
 import { supabaseAdmin } from "../supabase.js";
+import { uploadFile, deleteFile } from "../storage.js";
 
 const router = express.Router();
 
@@ -540,6 +542,53 @@ router.patch("/profile", requireAuth, async (req, res) => {
       bio: data.bio, avatarUrl: data.avatar_url,
       isAdmin: data.role === "admin", isArtist: data.role === "artist",
     },
+  });
+});
+
+// ─── Profile Avatar Upload ─────────────────────────────
+const avatarUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype.startsWith("image/")) return cb(new Error("Chỉ nhận file ảnh."));
+    cb(null, true);
+  },
+});
+
+router.post("/avatar", requireAuth, (req, res) => {
+  avatarUpload.single("avatar")(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: err.message || "Lỗi tải ảnh." });
+    try {
+      if (!req.file) return res.status(400).json({ error: "Cần chọn ảnh." });
+      const filePath = await uploadFile("avatars", req.user.username, req.file.buffer, req.file.mimetype, req.file.originalname);
+      const avatarUrl = filePath.url || filePath.publicUrl || filePath.path;
+      console.log("[avatar upload] filePath:", JSON.stringify(filePath));
+      console.log("[avatar upload] avatarUrl:", avatarUrl);
+
+      // Delete old avatar from storage if it was a Supabase URL
+      const { data: oldProfile } = await supabaseAdmin.from("profiles").select("avatar_url").eq("id", req.user.id).single();
+      if (oldProfile?.avatar_url && oldProfile.avatar_url.startsWith("http")) {
+        deleteFile("avatars", oldProfile.avatar_url).catch(() => {});
+      }
+
+      const { data, error } = await supabaseAdmin
+        .from("profiles").update({ avatar_url: avatarUrl, updated_at: new Date().toISOString() })
+        .eq("id", req.user.id).select("*").single();
+      if (error) {
+        console.error("[avatar update]", error.message);
+        return res.status(500).json({ error: "Lỗi cập nhật avatar." });
+      }
+      return res.json({
+        user: {
+          username: data.username, displayName: data.display_name,
+          bio: data.bio, avatarUrl: data.avatar_url,
+          isAdmin: data.role === "admin", isArtist: data.role === "artist",
+        },
+      });
+    } catch (e) {
+      console.error("[avatar upload]", e);
+      res.status(500).json({ error: "Lỗi tải ảnh lên." });
+    }
   });
 });
 

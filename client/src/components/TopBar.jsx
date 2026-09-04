@@ -15,8 +15,8 @@ export default function TopBar({ session, onAvatarClick, unreadNotifCount, onNot
           <Bell size={20} />
           {showBadge && <span className="topbar-badge">{unreadNotifCount > 99 ? "99+" : unreadNotifCount}</span>}
         </button>
-        <button type="button" className="avatar" style={{ background: gradientFor(hashHue(session.displayName)) }} onClick={onAvatarClick} title={session.displayName}>
-          {initials(session.displayName)}
+        <button type="button" className="avatar" style={session.avatarUrl ? { backgroundImage: `url('${session.avatarUrl}')`, backgroundSize: 'cover', backgroundPosition: 'center' } : { background: gradientFor(hashHue(session.displayName)) }} onClick={onAvatarClick} title={session.displayName}>
+          {!session.avatarUrl && initials(session.displayName)}
         </button>
       </div>
     </header>

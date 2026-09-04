@@ -51,18 +51,28 @@ export default function ProfilePage({
   async function saveProfile() {
     setEditSaving(true);
     try {
+      // Upload avatar first if a new file was selected
+      if (editAvatarFile) {
+        try {
+          const avatarResult = await api.uploadAvatar(editAvatarFile);
+          if (avatarResult?.user?.avatarUrl && session) {
+            session.avatarUrl = avatarResult.user.avatarUrl;
+          }
+        } catch (avatarErr) {
+          console.error('Avatar upload error:', avatarErr);
+        }
+      }
       const payload = {};
       if (editName.trim()) payload.displayName = editName.trim();
       payload.bio = editBio;
       const result = await api.updateProfile(payload);
       if (result && result.user) {
-        // Update the session object passed from parent
         if (session) {
           session.displayName = result.user.displayName;
         }
       }
       setEditProfileOpen(false);
-      window.location.reload(); // Refresh to reflect changes
+      window.location.reload();
     } catch (err) {
       console.error('Profile save error:', err);
     }
@@ -111,8 +121,8 @@ export default function ProfilePage({
       <div className="pf-info">
         <div className="pf-avatar-section">
           <div className="pf-avatar">
-            <div className="pf-avatar-img" style={{ background: gradientFor(hashHue(session.displayName)) }}>
-              {initials(session.displayName)}
+            <div className="pf-avatar-img" style={session.avatarUrl ? { backgroundImage: `url('${session.avatarUrl}')`, backgroundSize: 'cover', backgroundPosition: 'center' } : { background: gradientFor(hashHue(session.displayName)) }}>
+              {!session.avatarUrl && initials(session.displayName)}
             </div>
             {myArtist && <div className="pf-avatar-badge"><ArtistBadge badge={myArtist.badge} size={18} /></div>}
           </div>
@@ -172,7 +182,7 @@ export default function ProfilePage({
                 {/* Avatar */}
                 <div className="ep-avatar-section">
                   <div className="ep-avatar-preview"
-                    style={editAvatarPreview ? { backgroundImage: `url(${editAvatarPreview})` } : { background: gradientFor(hashHue(editName)) }}>
+                    style={editAvatarPreview ? { backgroundImage: `url(${editAvatarPreview})` } : session.avatarUrl ? { backgroundImage: `url('${session.avatarUrl}')`, backgroundSize: 'cover', backgroundPosition: 'center' } : { background: gradientFor(hashHue(editName)) }}>
                     {!editAvatarPreview && <span className="ep-avatar-initials">{initials(editName)}</span>}
                     <button type="button" className="ep-avatar-btn" onClick={() => avatarInputRef.current?.click()}>
                       <Upload size={14} />

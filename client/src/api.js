@@ -119,6 +119,7 @@ export const api = {
   me: () => request("/auth/me"),
   authProviders: () => request("/auth/providers"),
   updateProfile: (payload) => request("/auth/profile", { method: "PATCH", body: payload }),
+  uploadAvatar: (file) => { const fd = new FormData(); fd.append("avatar", file); return request("/auth/avatar", { method: "POST", body: fd, isForm: true }); },
   publicTracks: () => request("/tracks"),
   myTracks: () => request("/tracks/mine"),
   like: (id) => request("/tracks/" + id + "/like", { method: "POST" }),
