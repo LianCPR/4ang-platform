@@ -48,7 +48,8 @@ router.get("/trending", discoverLimit, async (req, res) => {
 
   const { data: trackRows } = await supabaseAdmin.from("tracks").select("*").in("id", sorted);
   const trackMap = new Map((trackRows || []).map(t => [t.id, t]));
-  res.json({ tracks: sorted.map(id => trackMap.get(id)).filter(Boolean) });
+  const tracks = await Promise.all(sorted.map(id => trackMap.get(id)).filter(Boolean).map(shapeTrack));
+  res.json({ tracks: tracks.filter(Boolean) });
 });
 
 // New releases
