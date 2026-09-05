@@ -138,6 +138,48 @@ router.get("/recommendations", optionalAuth, discoverLimit, async (req, res) => 
   res.json({ tracks: result, reason: likedSet.size > 0 ? "Dựa trên thể loại bạn thích" : (followedSet.size > 0 ? "Dựa trên nghệ sĩ bạn theo dõi" : null) });
 });
 
+// Because You Listened — tracks from artists/genres the user recently played
+router.get("/because-you-listened", optionalAuth, discoverLimit, async (req, res) => {
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 8, 1), 20);
+  const username = req.user?.username;
+  if (!username) return res.json({ tracks: [] });
+
+  // Get recent plays
+  const { data: plays } = await supabaseAdmin
+    .from("play_events").select("track_id").eq("username", username)
+    .order("created_at", { ascending: false }).limit(20);
+  const playedIds = [...new Set((plays || []).map(p => p.track_id).filter(Boolean))];
+  if (playedIds.length === 0) return res.json({ tracks: [] });
+
+  // Get the played tracks to find artists/genres
+  const { data: playedTracks } = await supabaseAdmin
+    .from("tracks").select("uploader_username, genres").in("id", playedIds);
+  const playedUploaders = new Set((playedTracks || []).map(t => t.uploader_username).filter(Boolean));
+  const playedGenres = new Set();
+  (playedTracks || []).forEach(t => {
+    (Array.isArray(t.genres) ? t.genres : []).forEach(g => playedGenres.add(g));
+  });
+
+  // Find similar tracks not yet played
+  const { data: candidates } = await supabaseAdmin
+    .from("tracks").select("*").eq("status", "approved")
+    .not("id", "in", `(${playedIds.join(",")})`)
+    .order("play_count", { ascending: false }).limit(200);
+
+  const scored = (candidates || []).map(t => {
+    let score = 0;
+    if (playedUploaders.has(t.uploader_username)) score += 10;
+    const tGenres = Array.isArray(t.genres) ? t.genres : [];
+    score += tGenres.filter(g => playedGenres.has(g)).length * 6;
+    score += (t.play_count || 0) * 0.1;
+    return { track: t, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+  const result = await Promise.all(scored.slice(0, limit).map(x => shapeTrack(x.track)));
+  res.json({ tracks: result });
+});
+
 // Genre listing
 router.get("/genres", async (req, res) => {
   const { data: rows } = await supabaseAdmin.from("tracks").select("genres").eq("status", "approved");
@@ -219,6 +261,75 @@ router.get("/smart-mix", optionalAuth, discoverLimit, async (req, res) => {
   if (!allTracks || allTracks.length === 0) return res.json({ tracks: [], type: "my-mix" });
   const tracks = await Promise.all(allTracks.slice(0, limit).map(shapeTrack));
   res.json({ tracks, type: "my-mix" });
+});
+
+// Start Radio — generate a queue of similar tracks based on a seed track
+router.get("/radio", optionalAuth, discoverLimit, async (req, res) => {
+  const seedId = (req.query.trackId || "").trim();
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 5), 30);
+  if (!seedId) return res.status(400).json({ error: "Thiếu trackId." });
+
+  const { data: seed } = await supabaseAdmin.from("tracks").select("*").eq("id", seedId).single();
+  if (!seed) return res.status(404).json({ error: "Không tìm thấy bài hát." });
+
+  const seedGenres = Array.isArray(seed.genres) ? seed.genres : [];
+  const seedComposer = seed.composer || "";
+  const seedUploader = seed.uploader_username || "";
+
+  // Find similar tracks
+  const { data: candidates } = await supabaseAdmin
+    .from("tracks").select("*").eq("status", "approved").neq("id", seedId).order("play_count", { ascending: false }).limit(200);
+
+  const scored = (candidates || []).map(t => {
+    let score = 0;
+    if (t.uploader_username === seedUploader) score += 10;
+    if (t.composer && t.composer === seedComposer) score += 8;
+    const tGenres = Array.isArray(t.genres) ? t.genres : [];
+    const genreOverlap = tGenres.filter(g => seedGenres.includes(g)).length;
+    score += genreOverlap * 6;
+    score += (t.play_count || 0) * 0.1;
+    return { track: t, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+  // Take top results, shuffle slightly for variety
+  const top = scored.slice(0, limit * 2);
+  for (let i = top.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [top[i], top[j]] = [top[j], top[i]];
+  }
+  const result = await Promise.all(top.slice(0, limit).map(x => shapeTrack(x.track)));
+  res.json({ tracks: [await shapeTrack(seed), ...result], seed: await shapeTrack(seed) });
+});
+
+// More Like This — find tracks similar to a given track
+router.get("/more-like-this", optionalAuth, discoverLimit, async (req, res) => {
+  const trackId = (req.query.trackId || "").trim();
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 12, 1), 20);
+  if (!trackId) return res.status(400).json({ error: "Thiếu trackId." });
+
+  const { data: seed } = await supabaseAdmin.from("tracks").select("*").eq("id", trackId).single();
+  if (!seed) return res.status(404).json({ error: "Không tìm thấy bài hát." });
+
+  const seedGenres = Array.isArray(seed.genres) ? seed.genres : [];
+  const seedUploader = seed.uploader_username || "";
+
+  const { data: candidates } = await supabaseAdmin
+    .from("tracks").select("*").eq("status", "approved").neq("id", trackId).order("play_count", { ascending: false }).limit(200);
+
+  const scored = (candidates || []).map(t => {
+    let score = 0;
+    if (t.uploader_username === seedUploader) score += 10;
+    if (t.composer && t.composer === seed.composer) score += 8;
+    const tGenres = Array.isArray(t.genres) ? t.genres : [];
+    score += tGenres.filter(g => seedGenres.includes(g)).length * 6;
+    score += (t.play_count || 0) * 0.1;
+    return { track: t, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+  const result = await Promise.all(scored.slice(0, limit).map(x => shapeTrack(x.track)));
+  res.json({ tracks: result });
 });
 
 export default router;

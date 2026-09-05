@@ -1,7 +1,7 @@
 import { NavLink, useNavigate } from "react-router-dom";
 import {
   ShieldCheck, LayoutDashboard, Inbox, BadgeCheck, Users, Mic2, Music,
-  Flag, BarChart3, ScrollText, Settings, LogOut, ArrowLeft, LifeBuoy,
+  Flag, BarChart3, ScrollText, Settings, LogOut, ArrowLeft, LifeBuoy, Image,
 } from "lucide-react";
 import { useAdminStats } from "./AdminStatsContext.jsx";
 
@@ -16,6 +16,7 @@ const NAV_ITEMS = [
   { to: "/admin/support", icon: LifeBuoy, label: "Hỗ trợ" },
   { to: "/admin/analytics", icon: BarChart3, label: "Phân tích" },
   { to: "/admin/audit-log", icon: ScrollText, label: "Nhật ký" },
+  { to: "/admin/banners", icon: Image, label: "Banner" },
   { to: "/admin/settings", icon: Settings, label: "Cài đặt" },
 ];
 

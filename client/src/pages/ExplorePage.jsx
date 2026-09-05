@@ -32,7 +32,7 @@ function TrendingTrack({ track, index, current, isPlaying, onPlay }) {
     <motion.button
       type="button"
       className="explore-trending-item"
-      onClick={() => onPlay(null, null)}
+      onClick={onPlay}
       whileHover={{ scale: 1.01 }}
       whileTap={{ scale: 0.98 }}
     >
@@ -86,9 +86,9 @@ function ChartTrack({ track, index, current, isPlaying, onPlay }) {
       <span className="explore-chart-duration">{formatTime(track.duration || 0)}</span>
       <button
         type="button"
-        className="explore-chart-play"
-        onClick={() => onPlay(null, null)}
-      >
+      className="explore-chart-play"
+      onClick={onPlay}
+    >
         {isCurrent && isPlaying ? <Pause size={16} /> : <Play size={16} />}
       </button>
     </motion.div>
@@ -124,6 +124,7 @@ export default function ExplorePage({
   const [chartPeriod, setChartPeriod] = useState(30);
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     Promise.all([
       api.trending(20, 30).catch(() => ({ tracks: [] })),
@@ -131,12 +132,15 @@ export default function ExplorePage({
       api.discoverGenres().catch(() => ({ genres: [] })),
       api.charts(chartPeriod).catch(() => ({ topSongs: [], topArtists: [] })),
     ]).then(([t, r, g, c]) => {
-      setTrendingTracks(t.tracks || []);
-      setRisingArtists(r.artists || []);
-      setGenres(g.genres || []);
-      setChartData(c);
-      setLoading(false);
+      if (!cancelled) {
+        setTrendingTracks(t.tracks || []);
+        setRisingArtists(r.artists || []);
+        setGenres(g.genres || []);
+        setChartData(c);
+        setLoading(false);
+      }
     });
+    return () => { cancelled = true; };
   }, [chartPeriod]);
 
   const handlePlayTrack = (track, index) => {
@@ -177,8 +181,26 @@ export default function ExplorePage({
         ))}
       </div>
 
+      {/* Loading skeleton */}
+      {loading && (
+        <div className="explore-loading">
+          <div className="explore-skeleton-list">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="explore-skeleton-row" style={{ animationDelay: `${i * 0.05}s` }}>
+                <div className="explore-sk-rank" />
+                <div className="explore-sk-art" />
+                <div style={{ flex: 1 }}>
+                  <div className="explore-sk-line" style={{ width: '60%' }} />
+                  <div className="explore-sk-line" style={{ width: '40%' }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Tab Content */}
-      {activeTab === "trending" && (
+      {!loading && activeTab === "trending" && (
         <motion.div
           key="trending"
           initial={{ opacity: 0, y: 10 }}
@@ -230,7 +252,7 @@ export default function ExplorePage({
         </motion.div>
       )}
 
-      {activeTab === "charts" && (
+      {!loading && activeTab === "charts" && (
         <motion.div
           key="charts"
           initial={{ opacity: 0, y: 10 }}
@@ -294,7 +316,7 @@ export default function ExplorePage({
         </motion.div>
       )}
 
-      {activeTab === "rising" && (
+      {!loading && activeTab === "rising" && (
         <motion.div
           key="rising"
           initial={{ opacity: 0, y: 10 }}
@@ -325,7 +347,7 @@ export default function ExplorePage({
         </motion.div>
       )}
 
-      {activeTab === "genres" && (
+      {!loading && activeTab === "genres" && (
         <motion.div
           key="genres"
           initial={{ opacity: 0, y: 10 }}

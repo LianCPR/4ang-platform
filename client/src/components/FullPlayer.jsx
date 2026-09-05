@@ -20,8 +20,10 @@ export default function FullPlayer({
   onPlay, onLike, onSave, onShare, onComment, onLyrics, onAddToPlaylist,
   shuffleEnabled, repeatMode, onToggleShuffle, onToggleRepeat,
   sleepTimer, sleepTimerRemaining, onStartSleepTimer, onClearSleepTimer,
+  audioState, audioError, onRetry,
 }) {
   const pct = progress.dur > 0 ? Math.round((progress.cur / progress.dur) * 1000) : 0;
+  const isBuffering = audioState === "buffering" || audioState === "loading";
   const isLocal = current.source === "local";
   const [lyricsFullscreen, setLyricsFullscreen] = useState(false);
   const toggleLyricsFullscreen = useCallback(() => setLyricsFullscreen((p) => !p), []);
@@ -40,14 +42,31 @@ export default function FullPlayer({
       .map((x) => x.t);
   }, [isLocal, currentTrack, tracks]);
 
+  // Swipe down to close (mobile)
+  const touchStartY = useRef(0);
+  const [swipeY, setSwipeY] = useState(0);
+  const handleTouchStart = useCallback((e) => { touchStartY.current = e.touches[0].clientY; }, []);
+  const handleTouchMove = useCallback((e) => {
+    const diff = e.touches[0].clientY - touchStartY.current;
+    if (diff > 0) setSwipeY(Math.min(diff, 200));
+  }, []);
+  const handleTouchEnd = useCallback(() => {
+    if (swipeY > 100) onClose();
+    setSwipeY(0);
+  }, [swipeY, onClose]);
+
   return (
     <>
     <motion.div
       className="np-overlay"
       initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
+      animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.25 }}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      style={{ transform: swipeY > 0 ? `translateY(${swipeY * 0.5}px)` : undefined }}
     >
       {/* Ambient background from artwork */}
       <div
@@ -199,6 +218,11 @@ export default function FullPlayer({
               <motion.button type="button" className="icon-btn np-ctrl" onClick={onPrev} whileTap={{ scale: 0.9 }} aria-label="Bài trước">
                 <SkipBack size={20} />
               </motion.button>
+              {isBuffering && !isPlaying ? (
+                <div className="np-play-btn" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div className="mini-spinner" style={{ width: 28, height: 28 }} />
+                </div>
+              ) : (
               <motion.button type="button" className="np-play-btn" onClick={onToggle} whileTap={{ scale: 0.92 }} aria-label={isPlaying ? "Tạm dừng" : "Phát"}>
                 <AnimatePresence mode="wait" initial={false}>
                   <motion.span
@@ -213,6 +237,7 @@ export default function FullPlayer({
                   </motion.span>
                 </AnimatePresence>
               </motion.button>
+              )}
               <motion.button type="button" className="icon-btn np-ctrl" onClick={onNext} whileTap={{ scale: 0.9 }} aria-label="Bài tiếp">
                 <SkipForward size={20} />
               </motion.button>

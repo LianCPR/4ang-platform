@@ -93,6 +93,9 @@ export default function App() {
   const sleepTimerRef = useRef(null);
   const savedPositionRef = useRef(null);
   const [crossfadeDuration, setCrossfadeDuration] = useState(() => lsGet("player_crossfade", 0));
+  const [audioState, setAudioState] = useState("idle"); // idle | loading | playing | paused | buffering | ended | error
+  const [audioError, setAudioError] = useState(null);
+  const audioRetryRef = useRef(0);
 
   // Phase 8 new state
   const [viewingPlaylist, setViewingPlaylist] = useState(null);
@@ -539,29 +542,101 @@ export default function App() {
   function likeCurrentTrack() {
     if (current && current.trackId) toggleLike(current.trackId);
   }
+  function playNext(track) {
+    if (!track) return;
+    const nextIndex = queueIndex + 1;
+    setQueue((q) => [...q.slice(0, nextIndex), track, ...q.slice(nextIndex)]);
+    showToast("Sẽ phát tiếp: " + track.title);
+  }
+  function addToQueue(track) {
+    if (!track) return;
+    setQueue((q) => [...q, track]);
+    showToast("Đã thêm vào hàng chờ.");
+  }
+  async function startRadio(track) {
+    if (!track) return;
+    try {
+      const res = await api.radio(track.id, 20);
+      if (res.tracks && res.tracks.length > 0) {
+        setQueue(res.tracks);
+        setQueueIndex(0);
+        playTrackAtIndex(res.tracks, 0);
+        showToast("Đang phát radio: " + track.title);
+      }
+    } catch (e) {
+      showToast("Không thể tạo radio.");
+    }
+  }
+  async function moreLikeThis(track) {
+    if (!track) return;
+    try {
+      const res = await api.moreLikeThis(track.id, 12);
+      if (res.tracks && res.tracks.length > 0) {
+        const newQueue = [track, ...res.tracks];
+        setQueue(newQueue);
+        setQueueIndex(0);
+        playTrackAtIndex(newQueue, 0);
+        showToast("Phát bài tương tự: " + track.title);
+      }
+    } catch (e) {
+      showToast("Không thể tìm bài tương tự.");
+    }
+  }
+  function retryAudio() {
+    const a = audioRef.current;
+    if (!a || !current) return;
+    if (audioRetryRef.current >= 3) {
+      setAudioError("Bài hát không thể phát. Bỏ qua để nghe bài tiếp.");
+      setTimeout(() => handleNext(), 2000);
+      return;
+    }
+    audioRetryRef.current++;
+    setAudioState("loading");
+    setAudioError(null);
+    const src = a.src;
+    a.src = "";
+    setTimeout(() => { a.src = src; a.load(); a.play().catch(() => {}); }, 100);
+  }
 
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
-    function onPlay() { setIsPlaying(true); }
-    function onPause() { setIsPlaying(false); }
-    function onEnded() { handleNext(); }
+    function onPlay() { setIsPlaying(true); setAudioState("playing"); setAudioError(null); audioRetryRef.current = 0; }
+    function onPause() { setIsPlaying(false); if (!a.ended) setAudioState("paused"); }
+    function onEnded() { setAudioState("ended"); handleNext(); }
+    function onWaiting() { setAudioState("buffering"); }
+    function onCanPlay() { setAudioState(a.paused ? "paused" : "playing"); }
+    function onError() {
+      const mediaError = a.error;
+      const msg = mediaError ? (mediaError.code === 4 ? "Bài hát không khả dụng." : mediaError.code === 3 ? "Lỗi解码 audio." : "Không thể phát bài hát.") : "Lỗi audio.";
+      setAudioState("error");
+      setAudioError(msg);
+    }
+    function onStall() { setAudioState("buffering"); }
     let lastUpdate = 0;
     function onTime() {
       const now = performance.now();
-      if (now - lastUpdate < 250) return; // throttle to ~4fps max
+      if (now - lastUpdate < 250) return;
       lastUpdate = now;
       setProgress({ cur: a.currentTime || 0, dur: a.duration || 0 });
     }
     a.addEventListener("play", onPlay);
     a.addEventListener("pause", onPause);
     a.addEventListener("ended", onEnded);
+    a.addEventListener("waiting", onWaiting);
+    a.addEventListener("canplay", onCanPlay);
+    a.addEventListener("error", onError);
+    a.addEventListener("stalled", onStall);
     a.addEventListener("timeupdate", onTime);
     a.addEventListener("loadedmetadata", onTime);
     return () => {
       a.removeEventListener("play", onPlay);
       a.removeEventListener("pause", onPause);
       a.removeEventListener("ended", onEnded);
+      a.removeEventListener("waiting", onWaiting);
+      a.removeEventListener("canplay", onCanPlay);
+      a.removeEventListener("error", onError);
+      a.removeEventListener("stalled", onStall);
       a.removeEventListener("timeupdate", onTime);
       a.removeEventListener("loadedmetadata", onTime);
     };
@@ -784,6 +859,12 @@ export default function App() {
         case "KeyS":
           e.preventDefault(); toggleShuffle();
           break;
+        case "KeyN":
+          if (current) { e.preventDefault(); handleNext(); }
+          break;
+        case "KeyP":
+          if (current) { e.preventDefault(); handlePrev(); }
+          break;
         default:
           break;
       }
@@ -871,6 +952,10 @@ export default function App() {
     onLyrics: (id) => setSheet({ type: "lyrics", trackId: id }),
     onAddToPlaylist: (trackId) => setAddToPlaylistTrackId(trackId),
     onOpenArtist: goArtist,
+    onPlayNext: playNext,
+    onAddToQueue: addToQueue,
+    onStartRadio: startRadio,
+    onMoreLikeThis: moreLikeThis,
   };
 
   return (
@@ -1006,6 +1091,7 @@ export default function App() {
                     onOpenArtist={goArtist}
                     onOpenPlaylist={goPlaylist}
                     onCreatePlaylist={() => setCreatePlaylistOpen(true)}
+                    onPlayNext={playNext} onAddToQueue={addToQueue} onAddToPlaylist={(trackId) => setAddToPlaylistTrackId(trackId)}
                   />
                 )}
                 {activeTab === "notifications" && (
@@ -1087,6 +1173,7 @@ export default function App() {
           onLyrics={() => currentLocalTrack && setSheet({ type: "lyrics", trackId: current.trackId })}
           shuffleEnabled={shuffleEnabled} repeatMode={repeatMode}
           onToggleShuffle={toggleShuffle} onToggleRepeat={toggleRepeat}
+          audioState={audioState} audioError={audioError} onRetry={retryAudio}
         />
       )}
 
@@ -1105,6 +1192,7 @@ export default function App() {
             onToggleShuffle={toggleShuffle} onToggleRepeat={toggleRepeat}
             sleepTimer={sleepTimer} sleepTimerRemaining={sleepTimerRemaining}
             onStartSleepTimer={startSleepTimer} onClearSleepTimer={clearSleepTimer}
+            audioState={audioState} audioError={audioError} onRetry={retryAudio}
           />
         )}
       </AnimatePresence>

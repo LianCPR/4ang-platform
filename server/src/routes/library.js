@@ -71,30 +71,74 @@ router.get("/saved", requireAuth, async (req, res) => {
 router.get("/search", async (req, res) => {
   const q = ((req.query.q || "") + "").trim();
   if (q.length < 1) return res.json({ tracks: [], artists: [], playlists: [], genres: [] });
-  const normalizedQuery = normalizeSearch(q);
+  const nq = normalizeSearch(q);
+  const likePattern = `%${nq}%`;
 
-  function matches(text) {
-    if (!text) return false;
-    return removeDiacritics(text).includes(normalizedQuery);
+  // Helper: fuzzy score — higher = better match
+  function matchScore(text, query) {
+    if (!text) return 0;
+    const nt = removeDiacritics(text);
+    if (nt === query) return 100;        // exact match
+    if (nt.startsWith(query)) return 80;  // prefix match
+    if (nt.includes(query)) return 60;    // contains
+    // Levenshtein-like: check if query chars appear in order (fuzzy)
+    let qi = 0;
+    for (let i = 0; i < nt.length && qi < query.length; i++) {
+      if (nt[i] === query[qi]) qi++;
+    }
+    if (qi === query.length) return 40;   // all chars found in order
+    if (qi >= query.length * 0.7) return 20; // most chars found
+    return 0;
   }
 
-  const { data: rawTracks } = await supabaseAdmin
-    .from("tracks").select("*").eq("status", "approved").order("play_count", { ascending: false }).limit(200);
-  const matchedTracks = (rawTracks || []).filter(t => matches(t.title) || matches(t.composer || "")).slice(0, 10);
-  const tracks = await Promise.all(matchedTracks.map(shapeTrack));
+  // Parallel queries
+  const [tracksResult, artistsResult, playlistsResult] = await Promise.all([
+    // Tracks: use PostgreSQL ilike for efficient filtering
+    supabaseAdmin.from("tracks").select("*")
+      .eq("status", "approved")
+      .or(`title.ilike.${likePattern},composer.ilike.${likePattern}`)
+      .order("play_count", { ascending: false })
+      .limit(20),
+    // Artists: ilike on artist_name
+    supabaseAdmin.from("artist_profiles")
+      .select("username, artist_name, avatar_url, verification_status, follower_count")
+      .or(`artist_name.ilike.${likePattern},username.ilike.${likePattern}`)
+      .limit(10),
+    // Playlists: ilike on title (public only)
+    supabaseAdmin.from("playlists")
+      .select("id, title, track_count, cover_url, owner_display_name")
+      .eq("is_public", true)
+      .ilike("title", likePattern)
+      .order("track_count", { ascending: false })
+      .limit(8),
+  ]);
 
-  const { data: allArtists } = await supabaseAdmin
-    .from("artist_profiles").select("username, artist_name, avatar_url, verification_status").order("artist_name").limit(100);
-  const artists = (allArtists || []).filter(a => matches(a.artist_name) || matches(a.username)).slice(0, 8).map(a => ({
+  // Score and rank tracks
+  const rawTracks = (tracksResult.data || []).map(t => ({
+    ...t,
+    _score: Math.max(matchScore(t.title, nq), matchScore(t.composer || "", nq)) + (t.play_count || 0) * 0.01,
+  })).sort((a, b) => b._score - a._score).slice(0, 10);
+  const tracks = await Promise.all(rawTracks.map(t => { delete t._score; return shapeTrack(t); }));
+
+  // Score and rank artists
+  const artists = (artistsResult.data || []).map(a => ({
     username: a.username, artistName: a.artist_name, avatarUrl: a.avatar_url || null,
     badge: a.verification_status === "verified" ? "verified" : "independent",
-  }));
+    followers: a.follower_count || 0,
+    _score: Math.max(matchScore(a.artist_name, nq), matchScore(a.username, nq)) + (a.follower_count || 0) * 0.001,
+  })).sort((a, b) => b._score - a._score).slice(0, 8);
+  artists.forEach(a => delete a._score);
 
-  const { data: allPlaylists } = await supabaseAdmin
-    .from("playlists").select("id, title, track_count").eq("is_public", true).order("track_count", { ascending: false }).limit(50);
-  const playlists = (allPlaylists || []).filter(p => matches(p.title)).slice(0, 6);
+  // Playlists
+  const playlists = (playlistsResult.data || []).map(p => ({
+    id: p.id, title: p.title, trackCount: p.track_count, coverUrl: p.cover_url,
+    ownerDisplayName: p.owner_display_name,
+    _score: matchScore(p.title, nq) + (p.track_count || 0) * 0.01,
+  })).sort((a, b) => b._score - a._score).slice(0, 6);
+  playlists.forEach(p => delete p._score);
 
-  const matchedGenres = GENRES.filter(g => g.toLowerCase().includes(q.toLowerCase()) || removeDiacritics(g).includes(normalizedQuery)).map(g => ({ name: g }));
+  // Genres (client-side, fast)
+  const matchedGenres = GENRES.filter(g => matchScore(g, nq) > 0).map(g => ({ name: g }));
 
   res.json({ tracks, artists, playlists, genres: matchedGenres });
 });

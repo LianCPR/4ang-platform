@@ -95,20 +95,24 @@ export default function NotificationsPage({ session, onOpenTrack, onOpenArtist }
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [filter, setFilter] = useState("all"); // all | unread
 
   useEffect(() => { loadNotifications(); }, []);
 
   async function loadNotifications() {
     setLoading(true);
+    setError(null);
     try {
       const [notifs, count] = await Promise.all([
-        api.notifications(50).catch(() => ({ notifications: [], unreadCount: 0 })),
-        api.unreadNotificationCount().catch(() => ({ count: 0 })),
+        api.notifications(50),
+        api.unreadNotificationCount(),
       ]);
       setNotifications(notifs.notifications || []);
       setUnreadCount(count.count || 0);
-    } catch (e) { /* ignore */ }
+    } catch (e) {
+      setError(e.message || "Không thể tải thông báo.");
+    }
     setLoading(false);
   }
 
@@ -150,6 +154,23 @@ export default function NotificationsPage({ session, onOpenTrack, onOpenArtist }
           {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="notif-skeleton-item" style={{ animationDelay: `${i * 0.1}s` }} />
           ))}
+        </div>
+      </div>
+    );
+  }
+
+  /* ── Error ── */
+  if (error) {
+    return (
+      <div className="notif-page">
+        <div className="notif-header">
+          <h1 className="notif-page-title">Thông báo</h1>
+        </div>
+        <div className="notif-empty">
+          <AlertTriangle size={40} strokeWidth={1} style={{ color: "var(--danger)", opacity: 0.4 }} />
+          <h3>Không thể tải thông báo</h3>
+          <p>{error}</p>
+          <button type="button" className="btn-secondary" onClick={loadNotifications} style={{ marginTop: "var(--sp-2)" }}>Thử lại</button>
         </div>
       </div>
     );

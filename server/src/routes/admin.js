@@ -2,11 +2,13 @@
  * 4ANG Admin Routes — Supabase PostgreSQL only.
  */
 import express from "express";
+import multer from "multer";
 import { shapeTrack, shapeArtistProfile, shapePublicUserSummary, recordAdminAudit, shapeAuditEntry, shapeArtistApplication, shapeVerifiedArtistApplication, shapeRelease, createNotification, getSetting, setSetting } from "../db.js";
 import { requireAuth, requireAdmin } from "../auth.js";
 import { rateLimit } from "../rateLimit.js";
 import { GENRES } from "./artists.js";
 import { supabaseAdmin } from "../supabase.js";
+import { uploadFile, deleteFile } from "../storage.js";
 
 const router = express.Router();
 router.use(requireAuth, requireAdmin);
@@ -403,6 +405,145 @@ router.post("/artist-applications/:id/reject", async (req, res) => {
   } catch (e) {
     console.error("[REJECT ERROR]", e);
     res.status(500).json({ error: "Lỗi server khi từ chối hồ sơ." });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// BANNERS — Admin-managed homepage carousel
+// ═══════════════════════════════════════════════════════════════
+const bannerUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+
+// GET /api/admin/banners — list all banners (sorted)
+router.get("/banners", async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("banners")
+      .select("*")
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    res.json({ banners: data || [] });
+  } catch (e) {
+    console.error("[BANNERS LIST]", e);
+    res.status(500).json({ error: "Không thể tải danh sách banner." });
+  }
+});
+
+// POST /api/admin/banners — create banner
+router.post("/banners", adminActionLimit, async (req, res) => {
+  try {
+    const { title, description, button_text, link_url, sort_order, is_active } = req.body || {};
+    const { data, error } = await supabaseAdmin
+      .from("banners")
+      .insert({
+        image_url: "",
+        title: (title || "").trim().slice(0, 200),
+        description: (description || "").trim().slice(0, 500),
+        button_text: (button_text || "PLAY").trim().slice(0, 50),
+        link_url: (link_url || "").trim().slice(0, 500),
+        sort_order: sort_order || 0,
+        is_active: is_active !== false,
+      })
+      .select()
+      .single();
+    if (error) throw error;
+    await recordAdminAudit(req.user.username, "banner_created", "banner", data.id, { title: data.title });
+    res.status(201).json({ banner: data });
+  } catch (e) {
+    console.error("[BANNER CREATE]", e);
+    res.status(500).json({ error: "Không thể tạo banner." });
+  }
+});
+
+// PATCH /api/admin/banners/:id — update banner metadata
+router.patch("/banners/:id", adminActionLimit, async (req, res) => {
+  try {
+    const { title, description, button_text, link_url, sort_order, is_active } = req.body || {};
+    const updates = {};
+    if (title !== undefined) updates.title = title.trim().slice(0, 200);
+    if (description !== undefined) updates.description = description.trim().slice(0, 500);
+    if (button_text !== undefined) updates.button_text = button_text.trim().slice(0, 50);
+    if (link_url !== undefined) updates.link_url = link_url.trim().slice(0, 500);
+    if (sort_order !== undefined) updates.sort_order = sort_order;
+    if (is_active !== undefined) updates.is_active = is_active;
+    updates.updated_at = new Date().toISOString();
+    const { data, error } = await supabaseAdmin
+      .from("banners")
+      .update(updates)
+      .eq("id", req.params.id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ banner: data });
+  } catch (e) {
+    console.error("[BANNER UPDATE]", e);
+    res.status(500).json({ error: "Không thể cập nhật banner." });
+  }
+});
+
+// POST /api/admin/banners/:id/image — upload banner image
+router.post("/banners/:id/image", adminActionLimit, bannerUpload.single("image"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "Chưa chọn ảnh." });
+    const bannerId = req.params.id;
+    // Get current banner to delete old image
+    const { data: existing } = await supabaseAdmin.from("banners").select("image_url").eq("id", bannerId).single();
+    // Upload new image
+    const ext = req.file.originalname.split(".").pop() || "jpg";
+    const fileName = `banner-${bannerId}-${Date.now()}.${ext}`;
+    const { url } = await uploadFile("artwork", req.user.id, req.file.buffer, req.file.mimetype, fileName);
+    // Update banner image_url
+    const { error } = await supabaseAdmin
+      .from("banners")
+      .update({ image_url: url, updated_at: new Date().toISOString() })
+      .eq("id", bannerId);
+    if (error) throw error;
+    // Delete old image if it was a Supabase Storage URL
+    if (existing?.image_url && existing.image_url !== url && existing.image_url.includes("supabase")) {
+      try { await deleteFile(existing.image_url); } catch (e) { console.error("[banner delete old]", e.message); }
+    }
+    const { data: updated } = await supabaseAdmin.from("banners").select("*").eq("id", bannerId).single();
+    res.json({ banner: updated });
+  } catch (e) {
+    console.error("[BANNER IMAGE]", e);
+    res.status(500).json({ error: "Không thể tải ảnh banner." });
+  }
+});
+
+// DELETE /api/admin/banners/:id — delete banner
+router.delete("/banners/:id", adminActionLimit, async (req, res) => {
+  try {
+    const { data: existing } = await supabaseAdmin.from("banners").select("image_url").eq("id", req.params.id).single();
+    const { error } = await supabaseAdmin.from("banners").delete().eq("id", req.params.id);
+    if (error) throw error;
+    // Delete image from storage
+    if (existing?.image_url && existing.image_url.includes("supabase")) {
+      try { await deleteFile(existing.image_url); } catch (e) { console.error("[banner delete img]", e.message); }
+    }
+    await recordAdminAudit(req.user.username, "banner_deleted", "banner", req.params.id, {});
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("[BANNER DELETE]", e);
+    res.status(500).json({ error: "Không thể xóa banner." });
+  }
+});
+
+// GET /api/banners — public endpoint for homepage (active banners only)
+// This is mounted separately in index.js
+export const publicBannerRouter = express.Router();
+publicBannerRouter.get("/banners", async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("banners")
+      .select("id, image_url, title, description, button_text, link_url")
+      .eq("is_active", true)
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    res.json({ banners: data || [] });
+  } catch (e) {
+    console.error("[PUBLIC BANNERS]", e);
+    res.json({ banners: [] });
   }
 });
 

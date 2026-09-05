@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, memo, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { Heart, MessageCircle, Share2, Bookmark, Play, Pause, MoreHorizontal, AlignLeft, Flag, ChevronLeft, ListPlus } from "lucide-react";
+import { Heart, MessageCircle, Share2, Bookmark, Play, Pause, MoreHorizontal, AlignLeft, Flag, ChevronLeft, ListPlus, SkipForward, ListMusic, Radio, Sparkles } from "lucide-react";
 import { gradientFor, hashHue, formatDate, timeAgo, formatCount } from "../lib/format";
 import { cardVariants, tapScale } from "../lib/motion";
 import { api } from "../api";
@@ -17,6 +17,7 @@ const REPORT_REASONS = [
 export default memo(function TrackCard({
   track, session, isCurrent, isPlaying, index = 0, progress,
   onPlay, onLike, onSave, onShare, onComment, onLyrics, onAddToPlaylist, onOpenArtist,
+  onPlayNext, onAddToQueue, onStartRadio, onMoreLikeThis,
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [reportStep, setReportStep] = useState(null); // null | "reason" | "sent"
@@ -182,6 +183,26 @@ export default memo(function TrackCard({
                         <div className="track-menu-meta">{track.uploaderDisplayName} · {timeAgo(track.createdAt)}</div>
                         {track.description && <p className="track-menu-desc">{track.description}</p>}
                       </div>
+                      {onStartRadio && (
+                        <button type="button" className="track-menu-item" onClick={() => { setMenuOpen(false); onStartRadio(track); }}>
+                          <Radio size={16} /> Bắt đầu radio
+                        </button>
+                      )}
+                      {onMoreLikeThis && (
+                        <button type="button" className="track-menu-item" onClick={() => { setMenuOpen(false); onMoreLikeThis(track); }}>
+                          <Sparkles size={16} /> Tương tự bài này
+                        </button>
+                      )}
+                      {onPlayNext && (
+                        <button type="button" className="track-menu-item" onClick={() => { setMenuOpen(false); onPlayNext(track); }}>
+                          <SkipForward size={16} /> Phát tiếp theo
+                        </button>
+                      )}
+                      {onAddToQueue && (
+                        <button type="button" className="track-menu-item" onClick={() => { setMenuOpen(false); onAddToQueue(track); }}>
+                          <ListMusic size={16} /> Thêm vào hàng chờ
+                        </button>
+                      )}
                       {onAddToPlaylist && (
                         <button type="button" className="track-menu-item" onClick={() => { setMenuOpen(false); onAddToPlaylist(track.id); }}>
                           <ListPlus size={16} /> Thêm vào playlist

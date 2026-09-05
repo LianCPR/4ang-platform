@@ -32,6 +32,27 @@ export default function ArtistProfilePage({ username, session, onBack, onOpenDas
     setFollowBusy(false);
   }
 
+  /* ── Loading skeleton ── */
+  if (!artist && !error) {
+    return (
+      <motion.div className="artist-page ap-redesign" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+        {onBack && (
+          <button type="button" className="artist-back-btn" onClick={onBack}>
+            <ChevronLeft size={18} /> Quay lại
+          </button>
+        )}
+        <div className="ap-cover-wrap"><div className="ap-cover" style={{ background: "var(--bg-muted)" }} /></div>
+        <div className="ap-profile" style={{ display: 'flex', gap: 'var(--sp-4)', alignItems: 'center' }}>
+          <div style={{ width: 80, height: 80, borderRadius: '50%', background: 'var(--bg-muted)', animation: 'skeleton-pulse 1.4s ease-in-out infinite' }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ width: '50%', height: 18, borderRadius: 6, background: 'var(--bg-muted)', marginBottom: 8, animation: 'skeleton-pulse 1.4s ease-in-out infinite' }} />
+            <div style={{ width: '30%', height: 12, borderRadius: 4, background: 'var(--bg-muted)', animation: 'skeleton-pulse 1.4s ease-in-out infinite' }} />
+          </div>
+        </div>
+      </motion.div>
+    );
+  }
+
   return (
     <motion.div className="artist-page ap-redesign" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}>
         {onBack && (

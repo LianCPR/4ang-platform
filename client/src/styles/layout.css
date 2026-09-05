@@ -1054,6 +1054,12 @@
   box-shadow: 0 2px 8px rgba(111, 128, 102, 0.3);
 }
 .mini-play-btn:hover { background: var(--c-sage); transform: scale(1.06); }
+.mini-spinner {
+  width: 36px; height: 36px; border-radius: 50%;
+  border: 2.5px solid var(--divider); border-top-color: var(--c-sage-deep);
+  animation: spin 0.8s linear infinite; flex-shrink: 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 .mini-like { width: 30px; height: 30px; }
 .mini-lyrics-btn { width: 30px; height: 30px; color: var(--text-faint); }
 .mini-lyrics-btn:hover { color: var(--c-sage-deep); background: var(--surface-hover); }
@@ -2158,6 +2164,15 @@
 }
 .np-sleep-option:hover { background: var(--surface-hover); color: var(--text-bright); }
 
+.explore-loading { padding: var(--sp-6) 0; }
+.explore-skeleton-list { display: flex; flex-direction: column; gap: 2px; }
+.explore-skeleton-row {
+  display: flex; align-items: center; gap: var(--sp-3); padding: 10px 12px;
+  border-radius: var(--r-btn); animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+.explore-sk-rank { width: 28px; height: 14px; border-radius: 4px; background: var(--bg-muted); }
+.explore-sk-art { width: 44px; height: 44px; border-radius: var(--r-btn); background: var(--bg-muted); flex-shrink: 0; }
+.explore-sk-line { height: 11px; border-radius: 4px; background: var(--bg-muted); margin-bottom: 6px; }
 .explore-empty {
   display: flex; flex-direction: column; align-items: center; gap: var(--sp-3);
   padding: var(--sp-8) 0; color: var(--text-faint); font-size: var(--fs-sm); text-align: center;

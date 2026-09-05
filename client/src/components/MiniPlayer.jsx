@@ -2,9 +2,11 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Play, Pause, SkipBack, SkipForward, Heart, Shuffle, Repeat, ListMusic, AlignLeft } from "lucide-react";
 import { gradientFor, hashHue, formatTime } from "../lib/format";
 
-export default function MiniPlayer({ current, isPlaying, progress, session, currentTrack, onOpen, onPrev, onToggle, onNext, onLike, onLyrics, onSeek, shuffleEnabled, repeatMode, onToggleShuffle, onToggleRepeat }) {
+export default function MiniPlayer({ current, isPlaying, progress, session, currentTrack, onOpen, onPrev, onToggle, onNext, onLike, onLyrics, onSeek, shuffleEnabled, repeatMode, onToggleShuffle, onToggleRepeat, audioState, audioError, onRetry }) {
   const pct = progress.dur > 0 ? (progress.cur / progress.dur) * 100 : 0;
   const liked = currentTrack ? currentTrack.likedBy.includes(session.username) : false;
+  const isBuffering = audioState === "buffering" || audioState === "loading";
+  const isError = audioState === "error";
 
   function handleSeek(e) {
     e.stopPropagation();
@@ -60,20 +62,24 @@ export default function MiniPlayer({ current, isPlaying, progress, session, curr
           <motion.button type="button" className="icon-btn" onClick={onPrev} whileTap={{ scale: 0.9 }} aria-label="Bài trước">
             <SkipBack size={16} />
           </motion.button>
-          <motion.button type="button" className="mini-play-btn" onClick={onToggle} whileTap={{ scale: 0.92 }} aria-label={isPlaying ? "Tạm dừng" : "Phát"}>
-            <AnimatePresence mode="wait" initial={false}>
-              <motion.span
-                key={isPlaying ? "pause" : "play"}
-                initial={{ opacity: 0, scale: 0.5 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.5 }}
-                transition={{ duration: 0.15 }}
-                style={{ display: "flex" }}
-              >
-                {isPlaying ? <Pause size={18} /> : <Play size={18} style={{ marginLeft: 2 }} />}
-              </motion.span>
-            </AnimatePresence>
-          </motion.button>
+          {isBuffering && !isPlaying ? (
+            <div className="mini-spinner" />
+          ) : (
+            <motion.button type="button" className="mini-play-btn" onClick={isError ? onRetry : onToggle} whileTap={{ scale: 0.92 }} aria-label={isError ? "Thử lại" : isPlaying ? "Tạm dừng" : "Phát"}>
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.span
+                  key={isPlaying ? "pause" : "play"}
+                  initial={{ opacity: 0, scale: 0.5 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.5 }}
+                  transition={{ duration: 0.15 }}
+                  style={{ display: "flex" }}
+                >
+                  {isPlaying ? <Pause size={18} /> : <Play size={18} style={{ marginLeft: 2 }} />}
+                </motion.span>
+              </AnimatePresence>
+            </motion.button>
+          )}
           <motion.button type="button" className="icon-btn" onClick={onNext} whileTap={{ scale: 0.9 }} aria-label="Bài tiếp">
             <SkipForward size={16} />
           </motion.button>

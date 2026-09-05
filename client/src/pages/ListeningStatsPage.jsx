@@ -29,17 +29,22 @@ export default function ListeningStatsPage({ onOpenArtist }) {
   const [period, setPeriod] = useState(30);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  useEffect(() => {
+  function loadStats() {
     setLoading(true);
+    setError(null);
     api.listeningStats(period).then((data) => {
       setStats(data);
       setLoading(false);
-    }).catch(() => {
+    }).catch((e) => {
+      setError(e.message || "Không thể tải dữ liệu thống kê.");
       setStats(null);
       setLoading(false);
     });
-  }, [period]);
+  }
+
+  useEffect(() => { loadStats(); }, [period]);
 
   const formatMinutes = (m) => {
     if (m < 60) return m + " phút";
@@ -190,6 +195,12 @@ export default function ListeningStatsPage({ onOpenArtist }) {
             </div>
           )}
         </motion.div>
+      ) : error ? (
+        <div className="ls-empty">
+          <BarChart3 size={48} style={{ color: "var(--danger)", opacity: 0.3 }} />
+          <p>{error}</p>
+          <button type="button" className="btn-secondary" onClick={loadStats} style={{ marginTop: "var(--sp-2)" }}>Thử lại</button>
+        </div>
       ) : (
         <div className="ls-empty">
           <BarChart3 size={48} style={{ color: "var(--c-sage)", opacity: 0.3 }} />

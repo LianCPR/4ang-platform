@@ -226,8 +226,25 @@ export default function PlaylistDetailPage({
     return (
       <motion.div className="pl-overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
         <motion.div className="pl-container" initial={{ y: 24, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 16, opacity: 0 }}>
-          <button type="button" className="pl-close" onClick={onClose}><X size={20} /></button>
-          <div className="pl-loading">Đang tải...</div>
+          <button type="button" className="pl-close" onClick={onClose} aria-label="Đóng"><X size={20} /></button>
+          <div className="pl-skeleton">
+            <div className="pl-sk-cover" />
+            <div className="pl-sk-lines">
+              <div className="pl-sk-line" style={{ width: '70%', height: 18 }} />
+              <div className="pl-sk-line" style={{ width: '40%', height: 12 }} />
+            </div>
+            <div className="pl-sk-tracks">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="pl-sk-track" style={{ animationDelay: `${i * 0.08}s` }}>
+                  <div className="pl-sk-track-art" />
+                  <div style={{ flex: 1 }}>
+                    <div className="pl-sk-line" style={{ width: '60%', height: 11 }} />
+                    <div className="pl-sk-line" style={{ width: '40%', height: 9 }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </motion.div>
       </motion.div>
     );

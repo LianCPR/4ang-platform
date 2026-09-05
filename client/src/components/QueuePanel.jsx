@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Play, Pause, X } from "lucide-react";
+import { Play, Pause, X, ListMusic } from "lucide-react";
 import { gradientFor, hashHue } from "../lib/format";
 
 function QueueRow({ item, isCurrent, isPlaying, onPlay, onRemove }) {
@@ -37,10 +37,14 @@ function QueueRow({ item, isCurrent, isPlaying, onPlay, onRemove }) {
 
 export default function QueuePanel({ queue, queueIndex, isPlaying, onPlayAt, onRemove, onClearUpcoming, onTogglePlayPause }) {
   const upcoming = queue.slice(queueIndex + 1);
+  const totalTracks = queue.length;
 
   return (
     <>
-      <h2 id="queue-title" className="sheet-title">Hàng chờ</h2>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--sp-3)' }}>
+        <h2 id="queue-title" className="sheet-title" style={{ margin: 0 }}>Hàng chờ</h2>
+        <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-faint)' }}>{totalTracks} bài</span>
+      </div>
       {queue[queueIndex] && (
         <>
           <p className="section-label">Đang phát</p>
@@ -51,13 +55,17 @@ export default function QueuePanel({ queue, queueIndex, isPlaying, onPlayAt, onR
         </>
       )}
       <div className="queue-upcoming-head">
-        <p className="section-label" style={{ marginBottom: 0 }}>Tiếp theo</p>
+        <p className="section-label" style={{ marginBottom: 0 }}>Tiếp theo ({upcoming.length})</p>
         {upcoming.length > 0 && (
-          <button type="button" className="link-btn" onClick={onClearUpcoming}>Xoá danh sách chờ</button>
+          <button type="button" className="link-btn" onClick={onClearUpcoming}>Xoá tất cả</button>
         )}
       </div>
       {upcoming.length === 0 ? (
-        <p className="sub">Không có bài nào tiếp theo.</p>
+        <div style={{ padding: 'var(--sp-6) 0', textAlign: 'center', color: 'var(--text-faint)', fontSize: 'var(--fs-sm)' }}>
+          <ListMusic size={24} style={{ opacity: 0.3, marginBottom: 8 }} />
+          <p>Hàng chờ trống.</p>
+          <p style={{ fontSize: 'var(--fs-xs)', marginTop: 4 }}>Nhấn ••• trên bài hát để thêm vào hàng chờ.</p>
+        </div>
       ) : (
         upcoming.map((item, i) => {
           const realIndex = queueIndex + 1 + i;

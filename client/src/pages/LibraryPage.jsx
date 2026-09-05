@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Heart, Bookmark, Clock, Users, ListMusic, Music, Search, Play, Pause,
-  ChevronRight, Disc3, Headphones, X
+  ChevronRight, Disc3, Headphones, X, Shuffle, Plus, Trash2, SkipForward, ListPlus
 } from "lucide-react";
 import { api } from "../api";
 import TrackCard from "../components/TrackCard";
@@ -95,6 +95,7 @@ export default function LibraryPage({
   session, current, isPlaying, progress,
   onPlay, onLike, onSave, onShare, onComment, onLyrics, onAddToPlaylist,
   onOpenArtist, onOpenPlaylist, onCreatePlaylist,
+  onPlayNext, onAddToQueue,
 }) {
   const [tab, setTab] = useState("overview");
   const [search, setSearch] = useState("");
@@ -283,6 +284,7 @@ export default function LibraryPage({
                       isCurrent={!!current && current.trackId === t.id}
                       onPlay={() => handlePlayTrack(recentTracks, i)}
                       onLike={() => onLike(t.id)} onOpenArtist={onOpenArtist}
+                      onPlayNext={onPlayNext} onAddToQueue={onAddToQueue} onAddToPlaylist={onAddToPlaylist}
                     />
                   ))}
                 </div>
@@ -338,15 +340,26 @@ export default function LibraryPage({
         {tab === "liked" && (
           <motion.div key="liked" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
             {filteredLiked.length > 0 ? (
+              <>
+              <div style={{ display: 'flex', gap: 'var(--sp-2)', marginBottom: 'var(--sp-3)' }}>
+                <button type="button" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={() => onPlay(filteredLiked, 0)}>
+                  <Play size={15} fill="white" /> Phát tất cả
+                </button>
+                <button type="button" className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={() => { const s = [...filteredLiked].sort(() => Math.random() - 0.5); onPlay(s, 0); }}>
+                  <Shuffle size={15} /> Shuffle
+                </button>
+              </div>
               <div className="lib-track-list">
                 {filteredLiked.map((t, i) => (
                   <TrackRow key={t.id} track={t} index={i} list={filteredLiked}
                     isCurrent={!!current && current.trackId === t.id}
                     onPlay={() => handlePlayTrack(filteredLiked, i)}
                     onLike={() => onLike(t.id)} onOpenArtist={onOpenArtist}
+                      onPlayNext={onPlayNext} onAddToQueue={onAddToQueue} onAddToPlaylist={onAddToPlaylist}
                   />
                 ))}
               </div>
+              </>
             ) : (
               <div className="lib-empty">
                 <Heart size={40} strokeWidth={1} style={{ color: "var(--c-sage)", opacity: 0.25 }} />
@@ -360,6 +373,13 @@ export default function LibraryPage({
         {/* ═══ PLAYLISTS ═══ */}
         {tab === "playlists" && (
           <motion.div key="playlists" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            {onCreatePlaylist && (
+              <div style={{ marginBottom: 'var(--sp-3)' }}>
+                <button type="button" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={onCreatePlaylist}>
+                  <Plus size={15} /> Tạo playlist mới
+                </button>
+              </div>
+            )}
             {filteredPlaylists.length > 0 ? (
               <div className="lib-playlist-grid">
                 {filteredPlaylists.map((p) => (
@@ -404,15 +424,26 @@ export default function LibraryPage({
         {tab === "recent" && (
           <motion.div key="recent" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
             {filteredRecent.length > 0 ? (
+              <>
+              <div style={{ display: 'flex', gap: 'var(--sp-2)', marginBottom: 'var(--sp-3)' }}>
+                <button type="button" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={() => onPlay(filteredRecent, 0)}>
+                  <Play size={15} fill="white" /> Phát tất cả
+                </button>
+                <button type="button" className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={() => { const s = [...filteredRecent].sort(() => Math.random() - 0.5); onPlay(s, 0); }}>
+                  <Shuffle size={15} /> Shuffle
+                </button>
+              </div>
               <div className="lib-track-list">
                 {filteredRecent.map((t, i) => (
                   <TrackRow key={t.id} track={t} index={i} list={filteredRecent}
                     isCurrent={!!current && current.trackId === t.id}
                     onPlay={() => handlePlayTrack(filteredRecent, i)}
                     onLike={() => onLike(t.id)} onOpenArtist={onOpenArtist}
+                      onPlayNext={onPlayNext} onAddToQueue={onAddToQueue} onAddToPlaylist={onAddToPlaylist}
                   />
                 ))}
               </div>
+              </>
             ) : (
               <div className="lib-empty">
                 <Clock size={40} strokeWidth={1} style={{ color: "var(--c-sage)", opacity: 0.25 }} />
@@ -428,7 +459,8 @@ export default function LibraryPage({
 }
 
 /* ─── Track Row (shared list item) ───────── */
-function TrackRow({ track, index, list, isCurrent, onPlay, onLike, onOpenArtist }) {
+function TrackRow({ track, index, list, isCurrent, onPlay, onLike, onOpenArtist, onPlayNext, onAddToQueue, onAddToPlaylist }) {
+  const [menuOpen, setMenuOpen] = useState(false);
   return (
     <div className={"lib-track-row" + (isCurrent ? " lib-row-active" : "")} onClick={onPlay}>
       <span className="lib-row-num">
@@ -457,6 +489,21 @@ function TrackRow({ track, index, list, isCurrent, onPlay, onLike, onOpenArtist 
       <button type="button" className="lib-row-like" onClick={(e) => { e.stopPropagation(); onLike(); }} aria-label="Thích">
         <Heart size={14} />
       </button>
+      <div style={{ position: 'relative' }}>
+        <button type="button" className="lib-row-like" onClick={(e) => { e.stopPropagation(); setMenuOpen(!menuOpen); }} aria-label="Thêm" style={{ fontSize: 16, lineHeight: 1 }}>
+          •••
+        </button>
+        {menuOpen && (
+          <>
+            <div style={{ position: 'fixed', inset: 0, zIndex: 998 }} onClick={() => setMenuOpen(false)} />
+            <div style={{ position: 'absolute', right: 0, top: '100%', zIndex: 999, background: 'var(--surface)', border: '1px solid var(--divider)', borderRadius: 'var(--r-card)', padding: 'var(--sp-2)', minWidth: 180, boxShadow: 'var(--shadow-lg)' }}>
+              {onPlayNext && <button type="button" className="track-menu-item" onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onPlayNext(track); }}><SkipForward size={14} /> Phát tiếp theo</button>}
+              {onAddToQueue && <button type="button" className="track-menu-item" onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onAddToQueue(track); }}><ListMusic size={14} /> Thêm vào hàng chờ</button>}
+              {onAddToPlaylist && <button type="button" className="track-menu-item" onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onAddToPlaylist(track.id); }}><ListPlus size={14} /> Thêm vào playlist</button>}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

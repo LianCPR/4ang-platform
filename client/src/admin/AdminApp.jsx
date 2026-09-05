@@ -21,6 +21,7 @@ import SupportTicketsPage from "./pages/SupportTicketsPage.jsx";
 import AnalyticsPage from "./pages/AnalyticsPage.jsx";
 import AuditLogPage from "./pages/AuditLogPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
+import BannersPage from "./pages/BannersPage.jsx";
 
 export default function AdminApp() {
   const { loading, session, notAdmin, login, logout } = useAdminSession();
@@ -55,6 +56,7 @@ export default function AdminApp() {
             <Route path="support" element={<SupportTicketsPage showToast={showToast} />} />
             <Route path="analytics" element={<AnalyticsPage />} />
             <Route path="audit-log" element={<AuditLogPage />} />
+            <Route path="banners" element={<BannersPage showToast={showToast} />} />
             <Route path="settings" element={<SettingsPage showToast={showToast} />} />
             <Route path="*" element={<AdminNotFound />} />
           </Routes>

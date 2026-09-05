@@ -121,6 +121,7 @@ export const api = {
   updateProfile: (payload) => request("/auth/profile", { method: "PATCH", body: payload }),
   uploadAvatar: (file) => { const fd = new FormData(); fd.append("avatar", file); return request("/auth/avatar", { method: "POST", body: fd, isForm: true }); },
   publicTracks: () => request("/tracks"),
+  banners: () => request("/banners"),
   myTracks: () => request("/tracks/mine"),
   like: (id) => request("/tracks/" + id + "/like", { method: "POST" }),
   save: (id) => request("/tracks/" + id + "/save", { method: "POST" }),
@@ -281,6 +282,13 @@ export const api = {
 
     supportTickets: (status) => request("/support/admin/tickets" + (status ? "?status=" + status : "")),
     replySupportTicket: (id, reply, status) => request("/support/admin/tickets/" + id + "/reply", { method: "POST", body: { reply, status } }),
+
+    // Banners
+    listBanners: () => request("/admin/banners"),
+    createBanner: (payload) => request("/admin/banners", { method: "POST", body: payload }),
+    updateBanner: (id, payload) => request("/admin/banners/" + id, { method: "PATCH", body: payload }),
+    deleteBanner: (id) => request("/admin/banners/" + id, { method: "DELETE" }),
+    uploadBannerImage: (id, file) => { const fd = new FormData(); fd.append("image", file); return request("/admin/banners/" + id + "/image", { method: "POST", body: fd, isForm: true }); },
   },
 
   // Support Tickets
@@ -303,6 +311,8 @@ export const api = {
 
   // --- Charts ---
   charts: (days) => request("/discover/charts" + (days ? "?days=" + days : "")),
+  radio: (trackId, limit) => request("/discover/radio?trackId=" + encodeURIComponent(trackId) + (limit ? "&limit=" + limit : "")),
+  moreLikeThis: (trackId, limit) => request("/discover/more-like-this?trackId=" + encodeURIComponent(trackId) + (limit ? "&limit=" + limit : "")),
 
   // --- Listening Stats ---
   listeningStats: (days) => request("/library/stats" + (days ? "?days=" + days : "")),

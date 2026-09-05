@@ -4,7 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import authRoutes from "./routes/auth.js";
 import trackRoutes from "./routes/tracks.js";
-import adminRoutes from "./routes/admin.js";
+import adminRoutes, { publicBannerRouter } from "./routes/admin.js";
 import artistRoutes from "./routes/artists.js";
 import submissionRoutes from "./routes/submissions.js";
 import reportRoutes from "./routes/reports.js";
@@ -51,6 +51,7 @@ app.get("/api/health", (req, res) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/tracks", trackRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api", publicBannerRouter);
 app.use("/api/artists", artistRoutes);
 app.use("/api/submissions", submissionRoutes);
 app.use("/api/reports", reportRoutes);

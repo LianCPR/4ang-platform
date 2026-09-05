@@ -27,20 +27,40 @@ function BannerCarousel({ tracks, onPlay }) {
   const [current, setCurrent] = useState(0);
   const timerRef = useRef(null);
   const touchStartX = useRef(0);
+  const [adminBanners, setAdminBanners] = useState([]);
+
+  useEffect(() => {
+    api.banners().then((res) => setAdminBanners(res.banners || [])).catch(() => {});
+  }, []);
 
   const banners = useMemo(() => {
+    // Admin-configured banners take priority
+    if (adminBanners.length > 0) {
+      return adminBanners.map((b) => ({
+        id: b.id,
+        title: b.title,
+        description: b.description || "",
+        buttonText: b.button_text || "PLAY",
+        linkUrl: b.link_url || "",
+        coverUrl: b.image_url,
+        source: "admin",
+      }));
+    }
+    // Fallback: auto-generate from tracks
     if (!tracks || tracks.length === 0) return [];
     return tracks
       .filter((t) => t.coverUrl)
       .slice(0, 5)
       .map((t) => ({
+        id: t.id,
         track: t,
         title: t.title,
         artist: (t.credits && t.credits[0] && t.credits[0].artistName) || t.composer || t.uploaderDisplayName,
         hue: hashHue(t.title),
         coverUrl: t.coverUrl,
+        source: "track",
       }));
-  }, [tracks]);
+  }, [adminBanners, tracks]);
 
   const next = useCallback(() => {
     if (banners.length === 0) return;
@@ -74,21 +94,30 @@ function BannerCarousel({ tracks, onPlay }) {
   return (
     <div className="banner-carousel" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
       <div className="banner-track" style={{ transform: `translateX(-${current * 100}%)` }}>
-        {banners.map((b) => (
-          <div key={b.track.id} className="banner-slide" onClick={() => {
-            const idx = tracks.findIndex((t) => t.id === b.track.id);
-            if (idx >= 0) onPlay(tracks, idx);
-          }}>
-            <div className="banner-bg" style={{ backgroundImage: `url('${b.coverUrl}')` }} />
-            <div className="banner-overlay" />
-            <div className="banner-content">
-              <span className="banner-label">FEATURED</span>
-              <h2 className="banner-title">{b.title}</h2>
-              <p className="banner-artist">{b.artist}</p>
-              <button className="banner-play-btn">▶ PLAY</button>
+        {banners.map((b) => {
+          const isTrack = b.source === "track";
+          return (
+            <div key={b.id} className="banner-slide" onClick={() => {
+              if (isTrack && b.track) {
+                const idx = tracks.findIndex((t) => t.id === b.track.id);
+                if (idx >= 0) onPlay(tracks, idx);
+              } else if (b.linkUrl) {
+                if (b.linkUrl.startsWith("http")) window.open(b.linkUrl, "_blank");
+                else window.location.href = b.linkUrl;
+              }
+            }}>
+              <div className="banner-bg" style={{ backgroundImage: `url('${b.coverUrl}')` }} />
+              <div className="banner-overlay" />
+              <div className="banner-content">
+                <span className="banner-label">FEATURED</span>
+                <h2 className="banner-title">{b.title}</h2>
+                {b.description && <p className="banner-artist">{b.description}</p>}
+                {isTrack && b.artist && !b.description && <p className="banner-artist">{b.artist}</p>}
+                <button className="banner-play-btn">▶ {b.buttonText || "PLAY"}</button>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       {banners.length > 1 && (
         <>
