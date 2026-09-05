@@ -1023,6 +1023,8 @@ export default function App() {
                     onLyrics={(id) => setSheet({ type: "lyrics", trackId: id })}
                     onOpenArtist={goArtist}
                     onShareArtist={(data) => openShare("artist", data)}
+                    onPlayNext={playNext} onAddToQueue={addToQueue}
+                    onAddToPlaylist={(trackId) => setAddToPlaylistTrackId(trackId)}
                   />
                 )}
                 {activeTab === "explore" && (
@@ -1125,6 +1127,7 @@ export default function App() {
                     onOpenArtistProfile={() => { setViewingArtist(session.username); setActiveTab("artist"); }}
                     onOpenArtistDashboard={() => goTab("artist-dashboard")}
                     onAddToPlaylist={(trackId) => setAddToPlaylistTrackId(trackId)}
+                    onPlayNext={playNext} onAddToQueue={addToQueue}
                     onOpenSettings={() => setActiveTab("settings")}
                     onOpenSupport={() => setActiveTab("support")}
                   />

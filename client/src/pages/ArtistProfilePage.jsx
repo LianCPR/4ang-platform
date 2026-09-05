@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
-import { ChevronLeft, UserPlus, UserCheck, LayoutDashboard, Play, Clock, ExternalLink, Music, Share2 } from "lucide-react";
+import { useEffect, useState, useRef, useCallback } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { ChevronLeft, UserPlus, UserCheck, LayoutDashboard, Play, Pause, Clock, ExternalLink, Music, Share2, Shuffle, SkipForward, ListMusic, Heart, MoreHorizontal } from "lucide-react";
 import { api } from "../api";
 import ArtistBadge from "../components/ArtistBadge";
 import EmptyState from "../components/EmptyState";
@@ -9,7 +9,50 @@ import { Flower, Butterfly, Vine } from "../assets/Botanical";
 
 const fadeUp = { hidden: { opacity: 0, y: 12 }, show: { opacity: 1, y: 0, transition: { duration: 0.4, ease: [0.16, 1, 0.3, 1] } } };
 
-export default function ArtistProfilePage({ username, session, onBack, onOpenDashboard, onPlay, current, isPlaying, progress, onOpenArtist, onShareArtist, ...railProps }) {
+/* ── Track Row with Context Menu ── */
+function ArtistTrackRow({ track: t, index: i, isCurrent, isPlaying, onPlay, onLike, onPlayNext, onAddToQueue, onAddToPlaylist, session }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef(null);
+
+  return (
+    <div className={"ap-track-row" + (isCurrent ? " playing" : "")} onClick={onPlay}>
+      <span className="ap-track-num">
+        {isCurrent && isPlaying ? (
+          <span className="ap-track-eq"><span /><span /><span /></span>
+        ) : (
+          <span className="ap-track-num-text">{String(i + 1).padStart(2, "0")}</span>
+        )}
+      </span>
+      <div className="ap-track-art" style={t.coverUrl ? { backgroundImage: `url('${t.coverUrl}')` } : { background: gradientFor(hashHue(t.title)) }}>
+        <div className="ap-track-play-overlay"><Play size={14} fill="white" /></div>
+      </div>
+      <div className="ap-track-info">
+        <div className="ap-track-title">{t.title}</div>
+        <div className="ap-track-artist">{t.credits && t.credits[0] ? t.credits[0].artistName : t.composer || t.uploaderDisplayName}</div>
+      </div>
+      <span className="ap-track-duration"><Clock size={11} /> {formatTime(t.duration || 0)}</span>
+      {onLike && session && (
+        <button type="button" className="icon-btn" style={{ width: 28, height: 28, flexShrink: 0 }} onClick={(e) => { e.stopPropagation(); onLike(t.id); }} aria-label="Thích">
+          <Heart size={13} fill={t.likedBy?.includes(session.username) ? "currentColor" : "none"} className={t.likedBy?.includes(session.username) ? "active active-wine" : ""} />
+        </button>
+      )}
+      <div style={{ position: 'relative' }} ref={menuRef}>
+        <button type="button" className="icon-btn" style={{ width: 28, height: 28, flexShrink: 0 }} onClick={(e) => { e.stopPropagation(); setMenuOpen(!menuOpen); }} aria-label="Thêm">
+          <MoreHorizontal size={14} />
+        </button>
+        {menuOpen && (
+          <div className="track-context-menu" style={{ position: 'absolute', right: 0, top: '100%', zIndex: 50 }} onClick={(e) => e.stopPropagation()}>
+            {onPlayNext && <button type="button" className="track-menu-item" onClick={() => { setMenuOpen(false); onPlayNext(t); }}><SkipForward size={14} /> Phát tiếp theo</button>}
+            {onAddToQueue && <button type="button" className="track-menu-item" onClick={() => { setMenuOpen(false); onAddToQueue(t); }}><ListMusic size={14} /> Thêm vào hàng chờ</button>}
+            {onAddToPlaylist && <button type="button" className="track-menu-item" onClick={() => { setMenuOpen(false); onAddToPlaylist(t.id); }}><ListMusic size={14} /> Thêm vào playlist</button>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default function ArtistProfilePage({ username, session, onBack, onOpenDashboard, onPlay, current, isPlaying, progress, onOpenArtist, onShareArtist, onLike, onSave, onPlayNext, onAddToQueue, onAddToPlaylist, ...railProps }) {
   const [artist, setArtist] = useState(null);
   const [error, setError] = useState("");
   const [followBusy, setFollowBusy] = useState(false);
@@ -106,8 +149,21 @@ export default function ArtistProfilePage({ username, session, onBack, onOpenDas
               </div>
 
               <div className="ap-actions">
+                {artist.topTracks.length > 0 && (
+                  <>
+                    <button type="button" className="btn-primary" onClick={() => onPlay && onPlay(artist.topTracks, 0)}>
+                      <Play size={15} fill="currentColor" /> Phát
+                    </button>
+                    <button type="button" className="btn-secondary" onClick={() => {
+                      const shuffled = [...artist.topTracks].sort(() => Math.random() - 0.5);
+                      onPlay && onPlay(shuffled, 0);
+                    }}>
+                      <Shuffle size={15} /> Xáo trộn
+                    </button>
+                  </>
+                )}
                 {artist.isOwner ? (
-                  <button type="button" className="btn-primary" onClick={onOpenDashboard}>
+                  <button type="button" className="btn-secondary" onClick={onOpenDashboard}>
                     <LayoutDashboard size={15} /> Quản lý
                   </button>
                 ) : (
@@ -166,31 +222,11 @@ export default function ArtistProfilePage({ username, session, onBack, onOpenDas
                   {artist.topTracks.map((t, i) => {
                     const isCurrent = current && current.trackId === t.id;
                     return (
-                      <div key={t.id} className={"ap-track-row" + (isCurrent ? " playing" : "")} onClick={() => onPlay && onPlay(artist.topTracks, i)}>
-                        <span className="ap-track-num">
-                          {isCurrent && isPlaying ? (
-                            <span className="ap-track-eq">
-                              <span /><span /><span />
-                            </span>
-                          ) : (
-                            <span className="ap-track-num-text">{String(i + 1).padStart(2, "0")}</span>
-                          )}
-                        </span>
-                        <div className="ap-track-art" style={t.coverUrl ? { backgroundImage: `url('${t.coverUrl}')` } : { background: gradientFor(hashHue(t.title)) }}>
-                          <div className="ap-track-play-overlay">
-                            <Play size={14} fill="white" />
-                          </div>
-                        </div>
-                        <div className="ap-track-info">
-                          <div className="ap-track-title">{t.title}</div>
-                          <div className="ap-track-artist">
-                            {t.credits && t.credits[0] ? t.credits[0].artistName : t.composer || t.uploaderDisplayName}
-                          </div>
-                        </div>
-                        <span className="ap-track-duration">
-                          <Clock size={11} /> {formatTime(t.duration || 0)}
-                        </span>
-                      </div>
+                      <ArtistTrackRow key={t.id} track={t} index={i} isCurrent={isCurrent} isPlaying={isPlaying}
+                        onPlay={() => onPlay && onPlay(artist.topTracks, i)}
+                        onLike={onLike} onPlayNext={onPlayNext} onAddToQueue={onAddToQueue}
+                        onAddToPlaylist={onAddToPlaylist} session={session}
+                      />
                     );
                   })}
                 </div>

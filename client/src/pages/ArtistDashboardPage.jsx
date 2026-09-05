@@ -22,6 +22,7 @@ const NAV_ITEMS = [
   { id: "overview", label: "Tổng quan", icon: LayoutDashboard },
   { id: "my-music", label: "Nhạc của tôi", icon: Music },
   { id: "analytics", label: "Phân tích", icon: BarChart3 },
+  { id: "profile", label: "Hồ sơ nghệ sĩ", icon: Mic2 },
 ];
 
 /* ─── Stat card ──────────────────────────── */
@@ -140,18 +141,30 @@ export default function ArtistDashboardPage({ session, showToast, onClose, onOpe
   const [search, setSearch] = useState("");
   const [verificationBusy, setVerificationBusy] = useState(false);
   const [verificationStatus, setVerificationStatus] = useState(null);
+  const [profileData, setProfileData] = useState(null);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editBio, setEditBio] = useState("");
+  const [editLinks, setEditLinks] = useState([]);
 
   useEffect(() => { loadData(); }, []);
 
   async function loadData() {
     setLoading(true);
     try {
-      const [statsRes, subsRes] = await Promise.all([
+      const [statsRes, subsRes, artistRes] = await Promise.all([
         api.artistStats().catch(() => null),
         api.mySubmissions().catch(() => ({ submissions: [] })),
+        api.myArtist().catch(() => null),
       ]);
       if (statsRes) { setStats(statsRes); if (statsRes.verificationStatus) setVerificationStatus(statsRes.verificationStatus); }
       setSubmissions(subsRes.submissions || []);
+      if (artistRes?.artist) {
+        setProfileData(artistRes.artist);
+        setEditName(artistRes.artist.artistName || "");
+        setEditBio(artistRes.artist.bio || "");
+        setEditLinks(artistRes.artist.links || []);
+      }
     } catch (e) { /* ignore */ }
     setLoading(false);
   }
@@ -171,6 +184,18 @@ export default function ArtistDashboardPage({ session, showToast, onClose, onOpe
         loadData();
       } catch (e) { showToast(e.message); }
     }
+  }
+
+  async function saveArtistProfile() {
+    if (profileSaving) return;
+    setProfileSaving(true);
+    try {
+      await api.updateArtistProfile({ artistName: editName.trim(), bio: editBio, links: editLinks });
+      showToast("Đã cập nhật hồ sơ nghệ sĩ.");
+      const res = await api.myArtist().catch(() => null);
+      if (res?.artist) setProfileData(res.artist);
+    } catch (e) { showToast(e.message || "Lỗi lưu hồ sơ."); }
+    setProfileSaving(false);
   }
 
   const allReleases = useMemo(() => {
@@ -556,6 +581,60 @@ export default function ArtistDashboardPage({ session, showToast, onClose, onOpe
                   <div className="dash-empty">
                     <BarChart3 size={28} style={{ opacity: 0.15, color: "var(--c-sage)" }} />
                     <p>Chưa đủ dữ liệu phân tích. Hãy phát hành thêm tác phẩm!</p>
+                  </div>
+                )}
+              </motion.div>
+            )}
+
+            {/* ════════════════ ARTIST PROFILE ════════════════ */}
+            {view === "profile" && (
+              <motion.div key="profile" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
+                <div className="dash-section">
+                  <h2 className="dash-section-title">Chỉnh sửa hồ sơ nghệ sĩ</h2>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)', maxWidth: 600 }}>
+                    <div className="ep-field">
+                      <label>Tên nghệ sĩ</label>
+                      <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)} maxLength={80} placeholder="Tên nghệ sĩ" />
+                    </div>
+                    <div className="ep-field">
+                      <label>Giới thiệu</label>
+                      <textarea value={editBio} onChange={(e) => setEditBio(e.target.value)} maxLength={500} rows={4} placeholder="Giới thiệu về bạn..." />
+                    </div>
+                    <div className="ep-field">
+                      <label>Liên kết</label>
+                      {editLinks.map((link, i) => (
+                        <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                          <input type="text" value={link.label} onChange={(e) => { const nl = [...editLinks]; nl[i] = { ...nl[i], label: e.target.value }; setEditLinks(nl); }} placeholder="Tên link" style={{ flex: 1 }} />
+                          <input type="text" value={link.url} onChange={(e) => { const nl = [...editLinks]; nl[i] = { ...nl[i], url: e.target.value }; setEditLinks(nl); }} placeholder="https://..." style={{ flex: 2 }} />
+                          <button type="button" className="icon-btn" onClick={() => setEditLinks(editLinks.filter((_, j) => j !== i))} aria-label="Xóa">
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      ))}
+                      <button type="button" className="btn-secondary" style={{ alignSelf: 'flex-start' }} onClick={() => setEditLinks([...editLinks, { label: '', url: '' }])}>
+                        <Plus size={14} /> Thêm liên kết
+                      </button>
+                    </div>
+                    <button type="button" className="dash-btn-primary" onClick={saveArtistProfile} disabled={profileSaving} style={{ alignSelf: 'flex-start' }}>
+                      {profileSaving ? 'Đang lưu...' : 'Lưu thay đổi'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Avatar / Cover preview */}
+                {profileData && (
+                  <div className="dash-section" style={{ marginTop: 'var(--sp-5)' }}>
+                    <h2 className="dash-section-title">Ảnh đại diện & Ảnh bìa</h2>
+                    <div style={{ display: 'flex', gap: 'var(--sp-5)', flexWrap: 'wrap' }}>
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ width: 100, height: 100, borderRadius: '50%', background: profileData.avatarUrl ? `url('${profileData.avatarUrl}') center/cover` : gradientFor(hashHue(profileData.artistName)), margin: '0 auto var(--sp-2)' }} />
+                        <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-muted)' }}>Avatar</span>
+                      </div>
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ width: 200, height: 100, borderRadius: 'var(--r-card)', background: profileData.coverUrl ? `url('${profileData.coverUrl}') center/cover` : gradientFor(hashHue(profileData.artistName + 'cover')), margin: '0 auto var(--sp-2)' }} />
+                        <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-muted)' }}>Ảnh bìa</span>
+                      </div>
+                    </div>
                   </div>
                 )}
               </motion.div>

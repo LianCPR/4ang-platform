@@ -1,5 +1,5 @@
-import { useState, useMemo, useRef } from "react";
-import { ShieldCheck, LogOut, Mic2, ChevronRight, Heart, Music, Users, Headphones, Clock, TrendingUp, Disc3, Star, ListMusic, Eye, ExternalLink, Sparkles, Settings2, HelpCircle, Pencil, X, Camera, Upload } from "lucide-react";
+import { useState, useMemo, useRef, useEffect } from "react";
+import { ShieldCheck, LogOut, Mic2, ChevronRight, Heart, Music, Users, Headphones, Clock, TrendingUp, Disc3, Star, ListMusic, Eye, ExternalLink, Sparkles, Settings2, HelpCircle, Pencil, X, Camera, Upload, SkipForward, ListMusic as ListMusicIcon, Share2 } from "lucide-react";
 import { api } from "../api";
 import { motion } from "framer-motion";
 import TrackCard from "../components/TrackCard";
@@ -20,6 +20,7 @@ export default function ProfilePage({
   session, myTracksState, current, isPlaying,
   onPlay, onLike, onSave, onShare, onComment, onLyrics, onLogout,
   myArtist, onBecomeArtist, onOpenArtistProfile, onOpenArtistDashboard, onAddToPlaylist,
+  onPlayNext, onAddToQueue,
   onOpenSettings, onOpenSupport,
 }) {
   const [activeTab, setActiveTab] = useState("overview");
@@ -31,8 +32,30 @@ export default function ProfilePage({
   const [editBgFile, setEditBgFile] = useState(null);
   const [editBgPreview, setEditBgPreview] = useState(null);
   const [editSaving, setEditSaving] = useState(false);
+  const [likedTracks, setLikedTracks] = useState([]);
+  const [likedLoading, setLikedLoading] = useState(false);
+  const [myPlaylists, setMyPlaylists] = useState([]);
+  const [playlistsLoading, setPlaylistsLoading] = useState(false);
   const avatarInputRef = useRef(null);
   const bgInputRef = useRef(null);
+
+  // Fetch liked songs when 'liked' tab is active
+  useEffect(() => {
+    if (activeTab !== 'liked' || likedTracks.length > 0) return;
+    setLikedLoading(true);
+    api.likedTracks(50).then((res) => {
+      setLikedTracks(res.tracks || []);
+    }).catch(() => {}).finally(() => setLikedLoading(false));
+  }, [activeTab]);
+
+  // Fetch playlists when 'playlists' tab is active
+  useEffect(() => {
+    if (activeTab !== 'playlists' || myPlaylists.length > 0) return;
+    setPlaylistsLoading(true);
+    api.myPlaylists().then((res) => {
+      setMyPlaylists(res.playlists || []);
+    }).catch(() => {}).finally(() => setPlaylistsLoading(false));
+  }, [activeTab]);
 
   function handleAvatarSelect(e) {
     const file = e.target.files?.[0];
@@ -72,7 +95,9 @@ export default function ProfilePage({
         }
       }
       setEditProfileOpen(false);
-      window.location.reload();
+      // Update session in-place instead of full reload
+      if (editAvatarPreview && session) session.avatarUrl = editAvatarPreview;
+      if (result?.user?.displayName && session) session.displayName = result.user.displayName;
     } catch (err) {
       console.error('Profile save error:', err);
     }
@@ -336,12 +361,69 @@ export default function ProfilePage({
 
         {/* Liked */}
         {activeTab === "liked" && (
-          <div className="pf-empty"><Heart size={36} style={{ opacity: 0.18, color: "var(--c-rose)" }} /><h3>Chưa thích bài nào</h3><p>Nhấn ❤ trên bất kỳ bài hát nào.</p></div>
+          <div>
+            {likedLoading ? (
+              <div className="pf-list">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i} className="pf-row" style={{ opacity: 0.5, animation: `skeleton-pulse 1.4s ease-in-out infinite ${i * 0.05}s` }}>
+                    <span className="pf-rank">{'0' + (i+1)}</span>
+                    <div className="pf-row-art" style={{ background: 'var(--bg-muted)' }} />
+                    <div className="pf-row-info"><div style={{ width: '60%', height: 12, borderRadius: 4, background: 'var(--bg-muted)' }} /><div style={{ width: '40%', height: 10, borderRadius: 4, background: 'var(--bg-muted)', marginTop: 4 }} /></div>
+                  </div>
+                ))}
+              </div>
+            ) : likedTracks.length > 0 ? (
+              <div className="pf-list">
+                <div className="pf-list-header"><Heart size={14} /><span>ĐÃ THÍCH ({likedTracks.length})</span></div>
+                {likedTracks.map((t, i) => {
+                  const artist = (t.credits && t.credits[0] && t.credits[0].artistName) || t.composer || t.uploaderDisplayName;
+                  const isCur = !!current && current.trackId === t.id;
+                  return (
+                    <div key={t.id} className={"pf-row" + (isCur ? " pf-row-active" : "")}
+                      onClick={() => onPlay(likedTracks, i)}>
+                      <span className="pf-rank">{isCur && isPlaying ? <Disc3 size={13} className="spin" /> : String(i + 1).padStart(2, "0")}</span>
+                      <div className="pf-row-art" style={t.coverUrl ? { backgroundImage: `url('${t.coverUrl}')` } : { background: gradientFor(hashHue(t.title)) }} />
+                      <div className="pf-row-info"><div className="pf-row-title">{t.title}</div><div className="pf-row-artist">{artist}</div></div>
+                      <span className="pf-row-dur">{formatTime(t.duration || 0)}</span>
+                      <button type="button" className="pf-row-like" onClick={(e) => { e.stopPropagation(); onLike(t.id); }}>
+                        <Heart size={13} fill="currentColor" className="active active-wine" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="pf-empty"><Heart size={36} style={{ opacity: 0.18, color: "var(--c-rose)" }} /><h3>Chưa thích bài nào</h3><p>Nhấn ❤ trên bất kỳ bài hát nào.</p></div>
+            )}
+          </div>
         )}
 
         {/* Playlists */}
         {activeTab === "playlists" && (
-          <div className="pf-empty"><ListMusic size={36} style={{ opacity: 0.18, color: "var(--c-sage)" }} /><h3>Chưa có playlist</h3><p>Tạo playlist đầu tiên.</p></div>
+          <div>
+            {playlistsLoading ? (
+              <div className="pf-list">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="pf-row" style={{ opacity: 0.5, animation: `skeleton-pulse 1.4s ease-in-out infinite ${i * 0.05}s` }}>
+                    <div className="pf-row-art" style={{ background: 'var(--bg-muted)' }} />
+                    <div className="pf-row-info"><div style={{ width: '50%', height: 12, borderRadius: 4, background: 'var(--bg-muted)' }} /></div>
+                  </div>
+                ))}
+              </div>
+            ) : myPlaylists.length > 0 ? (
+              <div className="pf-list">
+                <div className="pf-list-header"><ListMusic size={14} /><span>PLAYLIST ({myPlaylists.length})</span></div>
+                {myPlaylists.map((p) => (
+                  <div key={p.id} className="pf-row" style={{ cursor: 'pointer' }}>
+                    <div className="pf-row-art" style={p.coverUrl ? { backgroundImage: `url('${p.coverUrl}')` } : { background: gradientFor(hashHue(p.title)) }} />
+                    <div className="pf-row-info"><div className="pf-row-title">{p.title}</div><div className="pf-row-artist">{p.trackCount || 0} bài hát</div></div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="pf-empty"><ListMusic size={36} style={{ opacity: 0.18, color: "var(--c-sage)" }} /><h3>Chưa có playlist</h3><p>Tạo playlist đầu tiên.</p></div>
+            )}
+          </div>
         )}
 
         {/* Recent */}

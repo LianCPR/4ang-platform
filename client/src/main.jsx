@@ -3,12 +3,14 @@ import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import './index.css'
 import App from './App.jsx'
+import ErrorBoundary from './components/ErrorBoundary.jsx'
 
 // Lazy-loaded: a normal listener should never pay the download cost of
 // the Admin Platform (incl. recharts) just to open 4ANG (Part 61).
 const AdminApp = lazy(() => import('./admin/AdminApp.jsx'))
 
 createRoot(document.getElementById('root')).render(
+  <ErrorBoundary>
   <StrictMode>
     <BrowserRouter>
       <Routes>
@@ -20,5 +22,6 @@ createRoot(document.getElementById('root')).render(
         <Route path="/*" element={<App />} />
       </Routes>
     </BrowserRouter>
-  </StrictMode>,
+  </StrictMode>
+  </ErrorBoundary>,
 )
