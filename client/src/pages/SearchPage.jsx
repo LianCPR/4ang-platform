@@ -112,10 +112,13 @@ export default function SearchPage({
     setError(null);
 
     try {
-      const res = await api.search(trimmed);
+      const [searchRes, peopleRes] = await Promise.all([
+        api.search(trimmed),
+        api.searchPeople(trimmed).catch(() => ({ users: [] })),
+      ]);
       // Only update if this is still the latest query
       if (latestQueryRef.current === trimmed) {
-        setResults(res);
+        setResults({ ...searchRes, people: peopleRes.users || [] });
         saveToRecent(trimmed);
       }
     } catch (e) {
@@ -211,6 +214,7 @@ export default function SearchPage({
     { id: "all", label: "Tất cả" },
     { id: "tracks", label: "Bài hát", icon: Music },
     { id: "artists", label: "Nghệ sĩ", icon: Users },
+    { id: "people", label: "Mọi người", icon: Users },
     { id: "playlists", label: "Playlist", icon: ListMusic },
     { id: "genres", label: "Thể loại", icon: Tag },
   ];
@@ -219,7 +223,8 @@ export default function SearchPage({
   const filteredArtists = results?.artists || [];
   const filteredPlaylists = results?.playlists || [];
   const filteredGenres = results?.genres || [];
-  const hasResults = filteredTracks.length + filteredArtists.length + filteredPlaylists.length + filteredGenres.length > 0;
+  const filteredPeople = results?.people || [];
+  const hasResults = filteredTracks.length + filteredArtists.length + filteredPlaylists.length + filteredGenres.length + filteredPeople.length > 0;
 
   const showSuggestions = !query && !results && !loading && !error;
   const showResults = results && hasResults;
@@ -477,6 +482,24 @@ export default function SearchPage({
                       <div className="search-playlist-meta">{p.trackCount} bài</div>
                     </div>
                   </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* People */}
+          {(activeTab === "people" || (activeTab === "all" && filteredPeople.length > 0)) && (
+            <div className="search-section">
+              {activeTab === "all" && <p className="section-label">MỌI NGƯỜI</p>}
+              <div className="search-artists-grid">
+                {filteredPeople.map((p) => (
+                  <div key={p.id || p.username} className="search-artist-card">
+                    <div className="search-artist-avatar" style={p.avatarUrl ? { backgroundImage: `url('${p.avatarUrl}')` } : {}}>
+                      {!p.avatarUrl && <Users size={22} />}
+                    </div>
+                    <div className="search-artist-name">{p.displayName || p.username}</div>
+                    <div className="search-artist-badge">@{p.username}</div>
+                  </div>
                 ))}
               </div>
             </div>

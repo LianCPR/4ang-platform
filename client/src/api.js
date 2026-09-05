@@ -195,6 +195,16 @@ export const api = {
 
   // --- Phase 8: Notifications ---
   notifications: (limit) => request("/notifications" + (limit ? "?limit=" + limit : "")),
+
+  // Social
+  followUser: (username) => request("/social/follow/" + encodeURIComponent(username), { method: "POST" }),
+  unfollowUser: (username) => request("/social/follow/" + encodeURIComponent(username), { method: "DELETE" }),
+  checkFollowing: (usernames) => request("/social/follow/check", { method: "POST", body: { usernames } }),
+  feed: (limit, before) => request("/social/feed" + "?limit=" + (limit || 20) + (before ? "&before=" + before : "")),
+  followers: (username, limit) => request("/social/followers/" + encodeURIComponent(username) + (limit ? "?limit=" + limit : "")),
+  following: (username, limit) => request("/social/following/" + encodeURIComponent(username) + (limit ? "?limit=" + limit : "")),
+  searchPeople: (q) => request("/social/people?q=" + encodeURIComponent(q)),
+  shareToFeed: (type, id, message) => request("/social/share", { method: "POST", body: { type, id, message } }),
   markNotificationRead: (id) => request("/notifications/" + id + "/read", { method: "PATCH" }),
   markAllNotificationsRead: () => request("/notifications/read-all", { method: "POST" }),
   unreadNotificationCount: () => request("/notifications/unread-count"),

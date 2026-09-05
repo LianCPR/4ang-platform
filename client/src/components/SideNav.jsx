@@ -7,6 +7,7 @@ const NAV_ITEMS = [
   { id: "home", label: "HOME" },
   { id: "explore", label: "EXPLORE" },
   { id: "discover", label: "DISCOVER" },
+  { id: "social", label: "SOCIAL" },
   { id: "library", label: "LIBRARY" },
   { id: "listening-stats", label: "STATS" },
 ];

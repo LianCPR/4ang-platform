@@ -2846,3 +2846,26 @@
     font-size: var(--fs-xs);
   }
 }
+
+/* ── Social Feed ── */
+.feed-page { padding: var(--sp-5) var(--sp-4); max-width: 640px; margin: 0 auto; }
+.feed-header { margin-bottom: var(--sp-5); }
+.feed-title { font-family: var(--font-serif); font-size: var(--fs-xl); font-weight: 700; color: var(--text-bright); margin: 0; }
+.feed-subtitle { font-size: var(--fs-sm); color: var(--text-muted); margin: var(--sp-1) 0 0; }
+.feed-list { display: flex; flex-direction: column; gap: var(--sp-3); }
+.feed-item { background: var(--surface); border-radius: var(--r-card); padding: var(--sp-4); border: 1px solid var(--divider); }
+.feed-item-header { display: flex; align-items: center; gap: var(--sp-3); margin-bottom: var(--sp-3); }
+.feed-avatar { width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: white; font-size: 14px; background-size: cover; background-position: center; }
+.feed-user-info { flex: 1; min-width: 0; }
+.feed-username { font-weight: 600; font-size: var(--fs-sm); color: var(--text-bright); display: block; }
+.feed-activity-text { font-size: var(--fs-xs); color: var(--text-muted); display: flex; align-items: center; gap: 4px; }
+.feed-time { font-size: var(--fs-xs); color: var(--text-faint); flex-shrink: 0; }
+.feed-message { font-size: var(--fs-sm); color: var(--text); margin: 0 0 var(--sp-3); line-height: 1.5; }
+.feed-track-card { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3); background: var(--surface-hover); border-radius: var(--r-btn); cursor: pointer; transition: background var(--dur-micro) var(--ease-out); }
+.feed-track-card:hover { background: var(--surface-active); }
+.feed-track-art { width: 48px; height: 48px; border-radius: var(--r-btn); flex-shrink: 0; background-size: cover; background-position: center; display: flex; align-items: center; justify-content: center; position: relative; }
+.feed-track-play { opacity: 0; transition: opacity var(--dur-micro) var(--ease-out); }
+.feed-track-card:hover .feed-track-play { opacity: 1; }
+.feed-track-info { flex: 1; min-width: 0; }
+.feed-track-title { font-weight: 600; font-size: var(--fs-sm); color: var(--text-bright); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.feed-track-artist { font-size: var(--fs-xs); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

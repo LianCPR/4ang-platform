@@ -16,6 +16,7 @@ import releaseRoutes from "./routes/releases.js";
 import artistAppRoutes from "./routes/artist-applications.js";
 import supportRoutes from "./routes/support.js";
 import migrateRoutes from "./routes/migrate.js";
+import socialRoutes from "./routes/social.js";
 import { usingDefaultSecret } from "./auth.js";
 
 const app = express();
@@ -59,6 +60,7 @@ app.use("/api/playlists", playlistRoutes);
 app.use("/api/discover", discoverRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/library", libraryRoutes);
+app.use("/api/social", socialRoutes);
 app.use("/api/releases", releaseRoutes);
 app.use("/api/artist-applications", artistAppRoutes);
 app.use("/api/support", supportRoutes);

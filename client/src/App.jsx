@@ -38,6 +38,7 @@ const ArtistDashboardPage = lazy(() => import("./pages/ArtistDashboardPage"));
 const SubmitMusicPage = lazy(() => import("./pages/SubmitMusicPage"));
 const PlaylistDetailPage = lazy(() => import("./pages/PlaylistDetailPage"));
 const NotificationsPage = lazy(() => import("./pages/NotificationsPage"));
+const SocialFeedPage = lazy(() => import("./pages/SocialFeedPage"));
 const SearchPage = lazy(() => import("./pages/SearchPage"));
 import ArtistProfileForm from "./components/ArtistProfileForm";
 const BecomeArtistPage = lazy(() => import("./pages/BecomeArtistPage"));
@@ -1080,6 +1081,19 @@ export default function App() {
                     onOpenArtist={goArtist}
                     onOpenGenre={(name) => setViewingGenre(name)}
                     onOpenPlaylist={goPlaylist}
+                  />
+                )}
+                {activeTab === "social" && (
+                  <SocialFeedPage
+                    session={session}
+                    current={current} isPlaying={isPlaying}
+                    onPlay={(list, idx, trackId) => {
+                      if (trackId) {
+                        const i = tracks.findIndex((t) => t.id === trackId);
+                        if (i >= 0) playTrackAtIndex(tracks, i);
+                      } else if (list && idx != null) playTrackAtIndex(list, idx);
+                    }}
+                    onOpenArtist={goArtist}
                   />
                 )}
                 {activeTab === "library" && (
