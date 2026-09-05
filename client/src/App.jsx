@@ -124,6 +124,16 @@ export default function App() {
 
   /* ---- initial load: Supabase session first, then legacy JWT ---- */
   useEffect(() => {
+    let cancelled = false;
+    // Safety timeout: if auth takes >8s (slow network, Supabase cold start),
+    // show the app anyway so users don't stare at a blank loading screen.
+    const authTimeout = setTimeout(() => {
+      if (!cancelled) {
+        setAuthReady(true);
+        setTracksReady(true);
+      }
+    }, 8000);
+
     (async () => {
       let restored = false;
 
@@ -157,6 +167,8 @@ export default function App() {
         }
       }
 
+      clearTimeout(authTimeout);
+      if (cancelled) return;
       setAuthReady(true);
       try {
         const { tracks: list } = await api.publicTracks();
@@ -164,6 +176,8 @@ export default function App() {
       } catch (e) { /* feed load failed, leave empty */ }
       setTracksReady(true);
     })();
+
+    return () => { cancelled = true; clearTimeout(authTimeout); };
   }, []);
 
   // Deep link resolution — read URL path + params on mount

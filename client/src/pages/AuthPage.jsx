@@ -219,8 +219,10 @@ export default function AuthPage({ onAuthSuccess }) {
         setEmailError("Đăng ký tạm thời bị tắt. Vui lòng liên hệ hỗ trợ.");
       } else if (msg.includes("not found") || msg.includes("User not found")) {
         setEmailError("Không tìm thấy tài khoản với email này.");
+      } else if (msg.includes("Error sending magic link") || msg.includes("Failed to send") || msg.includes("email") && msg.includes("error")) {
+        setEmailError("Không gửi được email xác minh. Vui lòng thử lại sau hoặc sử dụng Google/Apple.");
       } else {
-        setEmailError(msg || "Không gửi được mã. Thử lại sau.");
+        setEmailError("Không gửi được mã. Thử lại sau hoặc sử dụng Google/Apple.");
       }
     }
     setEmailSendBusy(false);
