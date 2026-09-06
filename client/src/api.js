@@ -192,6 +192,8 @@ export const api = {
   discoverGenres: () => request("/discover/genres"),
   genreDetail: (name) => request("/discover/genres/" + encodeURIComponent(name)),
   artistReleases: (limit) => request("/discover/artist-releases" + "?limit=" + (limit || 12)),
+  discoverSocial: () => request("/discover/social"),
+  discoverClick: (section, type, id) => request("/discover/click", { method: "POST", body: { section, type, id } }),
 
   // --- Phase 8: Notifications ---
   notifications: (limit) => request("/notifications" + (limit ? "?limit=" + limit : "")),

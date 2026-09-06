@@ -130,7 +130,7 @@ async function resolveTrackMinimal(trackId) {
   if (!trackId) return null;
   const { data } = await supabaseAdmin.from("tracks").select("*").eq("id", String(trackId)).maybeSingle();
   if (!data) return null;
-  if (data.status !== "published") return null;
+  if (data.status !== "approved") return null;
   try { return await shapeTrack(data); } catch { return null; }
 }
 

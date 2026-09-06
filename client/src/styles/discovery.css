@@ -1,0 +1,418 @@
+/* ═══════════════════════════════════════════════════════════════
+   Social Discovery 2.0 — deterministic, explainable discovery
+   Reuses the .disc-* system for song rows / rails / cards.
+   ═══════════════════════════════════════════════════════════════ */
+
+.disco {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+}
+
+.disco-section {
+  background: rgba(255, 255, 255, 0.015);
+  border: 1px solid var(--divider);
+  border-radius: var(--r-card);
+  padding: var(--sp-5) var(--sp-4);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+/* ── Reason chips ("vì sao") ── */
+.disco-why {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 5px;
+}
+.disco-why-chip {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--c-sage-deep);
+  background: rgba(111, 128, 102, 0.1);
+  border: 1px solid rgba(111, 128, 102, 0.25);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+/* ── Avatar ── */
+.disco-avatar {
+  border-radius: 50%;
+  background-size: cover;
+  background-position: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-weight: 700;
+  flex-shrink: 0;
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+/* ── Friends listening ── */
+.disco-friends {
+  display: flex;
+  flex-direction: column;
+}
+.disco-friend-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-3) 0;
+  border-bottom: 1px solid var(--divider);
+}
+.disco-friend-row:last-child { border-bottom: none; }
+.disco-friend-person {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.disco-friend-who { min-width: 0; }
+.disco-friend-name {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-bright);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.disco-mutual {
+  color: var(--c-sage-deep);
+  font-size: var(--fs-lg);
+}
+.disco-friend-verb {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+.disco-friend-listen {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  cursor: pointer;
+  flex: 1;
+  max-width: 380px;
+  border-radius: 10px;
+  padding: 6px 8px;
+  transition: background var(--dur-micro) var(--ease-out);
+}
+.disco-friend-listen:hover { background: var(--surface-hover); }
+.disco-friend-art {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  background-size: cover;
+  background-position: center;
+  position: relative;
+  flex-shrink: 0;
+  background-color: rgba(111, 128, 102, 0.15);
+}
+.disco-friend-play {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 6px;
+  opacity: 0;
+  transition: opacity var(--dur-micro) var(--ease-out);
+}
+.disco-friend-listen:hover .disco-friend-play { opacity: 1; }
+.disco-friend-track { min-width: 0; }
+.disco-friend-title {
+  display: block;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-bright);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.disco-friend-artist {
+  display: block;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── People cards ── */
+.disco-people-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: var(--sp-3);
+}
+.disco-person-card {
+  background: var(--surface);
+  border: 1px solid var(--divider);
+  border-radius: var(--r-card);
+  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  transition: all var(--dur-micro) var(--ease-out);
+}
+.disco-person-card:hover {
+  border-color: var(--c-beige);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+.disco-person-top {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.disco-person-info { min-width: 0; display: flex; flex-direction: column; }
+.disco-person-name {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-bright);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.disco-person-match {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  color: var(--c-sage-deep);
+}
+.disco-person-reason {
+  font-size: 10px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.disco-person-similar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.disco-similar-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: rgba(111, 128, 102, 0.08);
+  border: 1px solid var(--divider);
+  border-radius: 999px;
+  padding: 2px 8px;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.disco-person-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* ── Buttons ── */
+.disco-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  transition: all var(--dur-micro) var(--ease-out);
+}
+.disco-btn-follow {
+  background: var(--c-sage-deep);
+  color: white;
+}
+.disco-btn-follow:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+.disco-btn-following {
+  background: rgba(111, 128, 102, 0.12);
+  color: var(--c-sage-deep);
+  border: 1px solid rgba(111, 128, 102, 0.3);
+}
+.disco-btn-following:hover { background: rgba(111, 128, 102, 0.2); }
+.disco-btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: all var(--dur-micro) var(--ease-out);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.disco-btn-ghost:hover { background: var(--surface-hover); color: var(--text-muted); }
+.disco-btn-join {
+  background: var(--c-beige);
+  color: #3d3426;
+  padding: 5px 12px;
+}
+.disco-btn-join:hover { filter: brightness(1.05); }
+
+/* ── Rooms rail ── */
+.disco-room-rail {
+  display: flex;
+  gap: var(--sp-3);
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  padding-bottom: var(--sp-2);
+  -webkit-overflow-scrolling: touch;
+}
+.disco-room-rail::-webkit-scrollbar { display: none; }
+.disco-room-card {
+  flex: 0 0 260px;
+  scroll-snap-align: start;
+  background: var(--surface);
+  border: 1px solid var(--divider);
+  border-radius: var(--r-card);
+  padding: var(--sp-3);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  transition: all var(--dur-micro) var(--ease-out);
+}
+.disco-room-card:hover {
+  border-color: var(--c-sage);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+.disco-room-top {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.disco-room-name {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-bright);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.disco-room-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: #fff;
+  background: #c75b56;
+  border-radius: 999px;
+  padding: 2px 8px;
+  flex-shrink: 0;
+  animation: disco-live-pulse 2s ease-in-out infinite;
+}
+@keyframes disco-live-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(199, 91, 86, 0.4); }
+  50% { box-shadow: 0 0 0 5px rgba(199, 91, 86, 0); }
+}
+.disco-room-song {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  background: rgba(111, 128, 102, 0.08);
+  border-radius: 10px;
+  padding: 6px;
+  min-height: 46px;
+}
+.disco-room-song-empty {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  justify-content: center;
+  gap: 6px;
+}
+.disco-room-art {
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  background-size: cover;
+  background-position: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  flex-shrink: 0;
+  background-color: rgba(111, 128, 102, 0.35);
+}
+.disco-room-songinfo { min-width: 0; display: flex; flex-direction: column; }
+.disco-room-title {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-bright);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.disco-room-artist {
+  font-size: 10px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.disco-room-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+.disco-room-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+/* ── Playlist rail (reuses .disc-new-card styles) ── */
+.disco-playlist-rail {
+  gap: var(--sp-3);
+}
+
+/* ── Shared-with-you mixed rows ── */
+.disco-share-row .disc-row-art { width: 40px; height: 40px; }
+
+/* ── Responsive ── */
+@media (max-width: 640px) {
+  .disco-section { padding: var(--sp-4) var(--sp-3); }
+  .disco-friend-row { flex-wrap: wrap; }
+  .disco-friend-listen { max-width: none; width: 100%; flex-basis: 100%; }
+  .disco-people-grid { grid-template-columns: 1fr; }
+  .disco-room-card { flex-basis: 230px; }
+  .disco-section .disc-section-head h2 { font-size: calc(var(--fs-md) - 1px); }
+}
+
+/* ── Dark mode ── */
+@media (prefers-color-scheme: dark) {
+  .disco-section { background: rgba(255, 255, 255, 0.02); }
+}

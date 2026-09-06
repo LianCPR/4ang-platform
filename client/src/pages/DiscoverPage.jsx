@@ -5,6 +5,7 @@ import { api } from "../api";
 import { Butterfly, Flower, Vine, RoseCluster, Petal } from "../assets/Botanical";
 import { gradientFor, hashHue, formatTime } from "../lib/format";
 import ErrorState from "../components/ErrorState";
+import SocialDiscovery from "../components/discovery/SocialDiscovery";
 
 /* ─── Fade-in section ─────────────────────────── */
 function Section({ children, delay = 0, className = "" }) {
@@ -122,7 +123,7 @@ function SkeletonList({ count = 5 }) {
 export default function DiscoverPage({
   session, tracks, current, isPlaying, progress,
   onPlay, onLike, onSave, onShare, onComment, onLyrics, onAddToPlaylist,
-  onOpenArtist, onOpenGenre, onOpenPlaylist,
+  onOpenArtist, onOpenGenre, onOpenPlaylist, onOpenRoom, showToast,
 }) {
   const [trending, setTrending] = useState([]);
   const [newReleases, setNewReleases] = useState([]);
@@ -256,6 +257,17 @@ export default function DiscoverPage({
           </div>
         </div>
       </Section>
+
+      {/* ── SOCIAL DISCOVERY 2.0 ── */}
+      <SocialDiscovery
+        session={session}
+        current={current} isPlaying={isPlaying}
+        onPlay={playFrom}
+        onOpenArtist={onOpenArtist}
+        onOpenPlaylist={onOpenPlaylist}
+        onOpenRoom={onOpenRoom}
+        showToast={showToast}
+      />
 
       {/* ── QUICK PICKS ── */}
       {quickPicks.length > 0 && (

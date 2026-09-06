@@ -199,7 +199,7 @@ CREATE POLICY "queue_select_member" ON public.room_queue
 DROP POLICY IF EXISTS "queue_insert_member" ON public.room_queue;
 CREATE POLICY "queue_insert_member" ON public.room_queue
   FOR INSERT TO authenticated
-  USING (EXISTS (SELECT 1 FROM public.rooms r
+  WITH CHECK (EXISTS (SELECT 1 FROM public.rooms r
           WHERE r.id = room_id AND r.status = 'active'
             AND public.is_room_member(auth.uid(), r.id)
             AND r.allow_song_adds = TRUE));
@@ -229,7 +229,7 @@ CREATE POLICY "reactions_select_member" ON public.room_reactions
 DROP POLICY IF EXISTS "reactions_insert_member" ON public.room_reactions;
 CREATE POLICY "reactions_insert_member" ON public.room_reactions
   FOR INSERT TO authenticated
-  USING (EXISTS (SELECT 1 FROM public.rooms r
+  WITH CHECK (EXISTS (SELECT 1 FROM public.rooms r
           WHERE r.id = room_id AND r.status = 'active'
             AND public.is_room_member(auth.uid(), r.id)
             AND r.allow_reactions = TRUE));

@@ -1100,6 +1100,8 @@ export default function App() {
                     onOpenArtist={goArtist}
                     onOpenGenre={(name) => setViewingGenre(name)}
                     onOpenPlaylist={goPlaylist}
+                    onOpenRoom={goRoom}
+                    showToast={showToast}
                   />
                 )}
                 {activeTab === "search" && (

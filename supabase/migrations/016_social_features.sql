@@ -43,8 +43,10 @@ CREATE POLICY "Authenticated users can read activity"
   ON activity_events FOR SELECT
   USING (true);
 
--- Keep insert restricted
+-- Keep insert restricted to the owning client (server inserts via
+-- service role bypass RLS; activity_events uses `username`, not user_id,
+-- and app sessions carry custom JWTs, so restrict by username claim).
 DROP POLICY IF EXISTS "Authenticated users can insert activity" ON activity_events;
 CREATE POLICY "Authenticated users can insert activity"
   ON activity_events FOR INSERT
-  WITH CHECK (auth.uid() = user_id OR user_id IS NULL);
+  WITH CHECK (auth.jwt() ->> 'username' IS NULL OR auth.jwt() ->> 'username' = username);
