@@ -8,6 +8,24 @@ import { supabaseAdmin } from "../supabase.js";
 
 const router = express.Router();
 
+// Batch-fetch actor profile enrichment (display name + avatar).
+async function enrichActors(notifications) {
+  if (!notifications || notifications.length === 0) return notifications;
+  const actors = [...new Set(notifications.map((n) => n.actorUsername).filter(Boolean))];
+  if (actors.length === 0) return notifications;
+  const { data: profiles } = await supabaseAdmin
+    .from("profiles")
+    .select("username, display_name, avatar_url")
+    .in("username", actors);
+  const map = {};
+  for (const p of (profiles || [])) map[p.username] = p;
+  return notifications.map((n) => ({
+    ...n,
+    actorDisplayName: n.actorUsername ? (map[n.actorUsername]?.display_name || n.actorUsername) : null,
+    actorAvatar: n.actorUsername ? (map[n.actorUsername]?.avatar_url || null) : null,
+  }));
+}
+
 router.get("/", requireAuth, async (req, res) => {
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 30, 1), 100);
   const { data: rows } = await supabaseAdmin
@@ -16,7 +34,8 @@ router.get("/", requireAuth, async (req, res) => {
   const { count: unreadCount } = await supabaseAdmin
     .from("notifications").select("*", { count: "exact", head: true })
     .eq("username", req.user.username).eq("is_read", false);
-  res.json({ notifications: (rows || []).map(shapeNotification), unreadCount: unreadCount || 0 });
+  const shaped = (rows || []).map(shapeNotification);
+  res.json({ notifications: await enrichActors(shaped), unreadCount: unreadCount || 0 });
 });
 
 router.patch("/:id/read", requireAuth, async (req, res) => {

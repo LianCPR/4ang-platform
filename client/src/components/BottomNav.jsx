@@ -1,9 +1,10 @@
 import { motion } from "framer-motion";
-import { Home, Compass, Search, Library, User, Bell, Users } from "lucide-react";
+import { Home, Compass, Search, Library, User, Bell, Users, Radio } from "lucide-react";
 
 const TABS = [
   { id: "home", icon: Home, label: "Trang chủ" },
   { id: "discover", icon: Compass, label: "Khám phá" },
+  { id: "rooms", icon: Radio, label: "Phòng" },
   { id: "search", icon: Search, label: "Tìm kiếm" },
   { id: "social", icon: Users, label: "Hoạt động" },
   { id: "library", icon: Library, label: "Thư viện" },

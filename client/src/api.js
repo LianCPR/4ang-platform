@@ -209,6 +209,20 @@ export const api = {
   markAllNotificationsRead: () => request("/notifications/read-all", { method: "POST" }),
   unreadNotificationCount: () => request("/notifications/unread-count"),
 
+  // --- Phase 2.1: Social Interaction 2.0 ---
+  postDetail: (id) => request("/social/post/" + encodeURIComponent(id)),
+  reactPost: (id) => request("/social/post/" + encodeURIComponent(id) + "/react", { method: "POST", body: {} }),
+
+  listComments: (targetType, targetId, { limit = 25, before } = {}) =>
+    request("/comments?targetType=" + encodeURIComponent(targetType) + "&targetId=" + encodeURIComponent(targetId)
+      + "&limit=" + limit + (before ? "&before=" + encodeURIComponent(before) : "")),
+  createComment: (targetType, targetId, text, parentId) =>
+    request("/comments", { method: "POST", body: { targetType, targetId, text, parentId: parentId || null } }),
+  editComment: (id, text) => request("/comments/" + encodeURIComponent(id), { method: "PATCH", body: { text } }),
+  deleteComment: (id) => request("/comments/" + encodeURIComponent(id), { method: "DELETE" }),
+  reactComment: (id) => request("/comments/" + encodeURIComponent(id) + "/react", { method: "POST", body: {} }),
+  mentionSearch: (q) => request("/comments/mention-search?q=" + encodeURIComponent(q)),
+
   // --- Phase 8: Library ---
   recentlyPlayed: (limit) => request("/library/recently-played" + (limit ? "?limit=" + limit : "")),
   likedTracks: (limit) => request("/library/liked" + (limit ? "?limit=" + limit : "")),
@@ -337,4 +351,32 @@ export const api = {
 
   // --- All Artists (for onboarding) ---
   fetchAllArtists: () => request("/artists/all"),
+
+  // --- Phase 2.2: Music Rooms ---
+  rooms: {
+    discovery: (limit) => request("/rooms/discovery" + (limit ? "?limit=" + limit : "")),
+    mine: () => request("/rooms/mine"),
+    create: (payload) => request("/rooms", { method: "POST", body: payload }),
+    get: (id) => request("/rooms/" + encodeURIComponent(id)),
+    join: (id, joinCode) => request("/rooms/" + encodeURIComponent(id) + "/join", { method: "POST", body: { joinCode } }),
+    leave: (id) => request("/rooms/" + encodeURIComponent(id) + "/leave", { method: "POST" }),
+    end: (id) => request("/rooms/" + encodeURIComponent(id) + "/end", { method: "POST" }),
+    transferHost: (id, username) => request("/rooms/" + encodeURIComponent(id) + "/transfer-host", { method: "POST", body: { username } }),
+    heartbeat: (id) => request("/rooms/" + encodeURIComponent(id) + "/heartbeat", { method: "POST" }),
+    sync: (id, payload) => request("/rooms/" + encodeURIComponent(id) + "/sync", { method: "POST", body: payload }),
+    getSync: (id) => request("/rooms/" + encodeURIComponent(id) + "/sync"),
+    addToQueue: (id, trackId) => request("/rooms/" + encodeURIComponent(id) + "/queue", { method: "POST", body: { trackId } }),
+    reorderQueue: (id, order) => request("/rooms/" + encodeURIComponent(id) + "/queue/reorder", { method: "POST", body: { order } }),
+    removeFromQueue: (id, queueId) => request("/rooms/" + encodeURIComponent(id) + "/queue/" + encodeURIComponent(queueId), { method: "DELETE" }),
+    play: (id, trackId, positionMs) => request("/rooms/" + encodeURIComponent(id) + "/play", { method: "POST", body: { trackId, positionMs } }),
+    pause: (id, positionMs) => request("/rooms/" + encodeURIComponent(id) + "/pause", { method: "POST", body: { positionMs } }),
+    seek: (id, positionMs) => request("/rooms/" + encodeURIComponent(id) + "/seek", { method: "POST", body: { positionMs } }),
+    next: (id) => request("/rooms/" + encodeURIComponent(id) + "/next", { method: "POST" }),
+    prev: (id) => request("/rooms/" + encodeURIComponent(id) + "/prev", { method: "POST" }),
+    shuffle: (id) => request("/rooms/" + encodeURIComponent(id) + "/shuffle", { method: "POST" }),
+    repeat: (id, mode) => request("/rooms/" + encodeURIComponent(id) + "/repeat", { method: "POST", body: { mode } }),
+    react: (id, emoji) => request("/rooms/" + encodeURIComponent(id) + "/react", { method: "POST", body: { emoji } }),
+    invite: (id, username) => request("/rooms/" + encodeURIComponent(id) + "/invite", { method: "POST", body: { username } }),
+    invites: () => request("/rooms/invites/list"),
+  },
 };

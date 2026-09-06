@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { id: "explore", icon: Compass, label: "Explore" },
   { id: "discover", icon: Music, label: "Discover" },
   { id: "social", icon: Users, label: "Social" },
+  { id: "rooms", icon: Radio, label: "Rooms" },
   { id: "listening-stats", icon: BarChart3, label: "Listening Stats" },
 ];
 

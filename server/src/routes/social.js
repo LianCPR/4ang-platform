@@ -1,10 +1,11 @@
 /**
- * 4ANG Social Routes — User follows, Feed, Activity
+ * 4ANG Social Routes — User follows, Feed, Activity, Post detail + reactions
  */
 import express from "express";
 import { requireAuth } from "../auth.js";
 import { supabaseAdmin } from "../supabase.js";
 import { shapeTrack, recordActivity, createNotification, shapePublicUserSummary } from "../db.js";
+import { shouldNotify } from "../social-helpers.js";
 
 const router = express.Router();
 
@@ -158,7 +159,7 @@ router.get("/feed", requireAuth, async (req, res) => {
       if (before) query = query.lt("created_at", before);
 
       const { data: events } = await query;
-      return res.json({ activities: await shapeFeedEvents(events || []), hasMore: (events || []).length === limit });
+      return res.json({ activities: await shapeFeedEvents(events || [], req.user.username), hasMore: (events || []).length === limit });
     }
 
     let query = supabaseAdmin
@@ -169,7 +170,7 @@ router.get("/feed", requireAuth, async (req, res) => {
     if (before) query = query.lt("created_at", before);
 
     const { data: events } = await query;
-    res.json({ activities: await shapeFeedEvents(events || []), hasMore: (events || []).length === limit });
+    res.json({ activities: await shapeFeedEvents(events || [], req.user.username), hasMore: (events || []).length === limit });
   } catch (e) {
     console.error("[FEED]", e);
     res.status(500).json({ error: "Không thể tải feed." });
@@ -177,7 +178,7 @@ router.get("/feed", requireAuth, async (req, res) => {
 });
 
 // Shape feed events into rich activity objects
-async function shapeFeedEvents(events) {
+async function shapeFeedEvents(events, viewerUsername) {
   if (events.length === 0) return [];
 
   // Batch-fetch profiles
@@ -206,6 +207,27 @@ async function shapeFeedEvents(events) {
   if (playlistIds.length > 0) {
     const { data: playlists } = await supabaseAdmin.from("playlists").select("*").in("id", playlistIds.map(Number).filter(n => !isNaN(n)));
     for (const p of (playlists || [])) playlistMap[String(p.id)] = p;
+  }
+
+  // Batch-fetch rooms if needed (Phase 2.2)
+  const roomIds = [...new Set(events.filter(e => e.target_type === "room").map(e => e.target_id).filter(Boolean))];
+  let roomMap = {};
+  if (roomIds.length > 0) {
+    const { data: rooms } = await supabaseAdmin.from("rooms").select("id, name, host_username, status").in("id", roomIds);
+    for (const r of (rooms || [])) roomMap[r.id] = r;
+  }
+
+  // Viewer's reactions on these events (posts)
+  let reactedMap = {};
+  if (viewerUsername && events.length > 0) {
+    const ids = events.map(e => e.id);
+    const { data: reactions } = await supabaseAdmin
+      .from("social_reactions")
+      .select("target_id")
+      .eq("target_type", "post")
+      .eq("username", viewerUsername)
+      .in("target_id", ids);
+    for (const r of (reactions || [])) reactedMap[r.target_id] = true;
   }
 
   return events.map(event => {
@@ -243,6 +265,16 @@ async function shapeFeedEvents(events) {
       target = { type: "artist", username: targetId, name: meta.artistName || targetId };
     } else if (targetType === "user") {
       target = { type: "user", username: targetId, name: meta.displayName || targetId };
+    } else if (targetType === "room") {
+      const room = roomMap[targetId];
+      if (room && room.status === "active") {
+        target = {
+          type: "room",
+          id: room.id,
+          name: room.name,
+          participantCount: meta.participantCount || 0,
+        };
+      }
     }
 
     return {
@@ -254,6 +286,9 @@ async function shapeFeedEvents(events) {
       target,
       message: meta.message || null,
       createdAt: event.created_at,
+      likeCount: event.like_count || 0,
+      commentCount: event.comment_count || 0,
+      reacted: !!reactedMap[event.id],
     };
   });
 }
@@ -293,6 +328,106 @@ router.post("/share", requireAuth, async (req, res) => {
     message ? { message } : null);
 
   res.json({ ok: true });
+});
+
+// ======================== POST DETAIL + REACTIONS ========================
+
+// Resolve a single activity event into a rich post object
+async function shapePostById(event, viewerUsername) {
+  if (!event) return null;
+  const events = [event];
+  const shaped = await shapeFeedEvents(events);
+  if (!shaped || shaped.length === 0) return null;
+  const post = shaped[0];
+
+  // Reaction data for the viewer + counts
+  const { data: reactions } = await supabaseAdmin
+    .from("social_reactions")
+    .select("username")
+    .eq("target_type", "post")
+    .eq("target_id", event.id);
+  post.likeCount = (reactions || []).length;
+  post.reacted = !!viewerUsername && (reactions || []).some((r) => r.username === viewerUsername);
+
+  return post;
+}
+
+// Get a single activity post (public, or the viewer's own)
+router.get("/post/:id", requireAuth, async (req, res) => {
+  try {
+    const { data: event } = await supabaseAdmin
+      .from("activity_events").select("*").eq("id", req.params.id).maybeSingle();
+    if (!event) return res.status(404).json({ error: "Không tìm thấy bài đăng." });
+
+    const post = await shapePostById(event, req.user.username);
+    if (!post) return res.status(404).json({ error: "Không tìm thấy bài đăng." });
+
+    res.json({ post });
+  } catch (e) {
+    console.error("[social.post]", e);
+    res.status(500).json({ error: "Không thể tải bài đăng." });
+  }
+});
+
+// Toggle like/reaction on an activity post
+router.post("/post/:id/react", requireAuth, async (req, res) => {
+  try {
+    const { data: event } = await supabaseAdmin
+      .from("activity_events").select("id, username").eq("id", req.params.id).maybeSingle();
+    if (!event) return res.status(404).json({ error: "Không tìm thấy bài đăng." });
+
+    const { data: existing } = await supabaseAdmin
+      .from("social_reactions")
+      .select("id")
+      .eq("target_type", "post")
+      .eq("target_id", event.id)
+      .eq("username", req.user.username)
+      .maybeSingle();
+
+    let reacted = true;
+    if (existing) {
+      await supabaseAdmin.from("social_reactions").delete().eq("id", existing.id);
+      reacted = false;
+    } else {
+      const { error: insErr } = await supabaseAdmin.from("social_reactions").insert({
+        target_type: "post", target_id: event.id, username: req.user.username,
+        created_at: new Date().toISOString(),
+      });
+      // Duplicate insert (race) counts as already reacted
+      if (insErr && !String(insErr.message || "").includes("duplicate")) {
+        console.error("[social.react.insert]", insErr);
+        return res.status(500).json({ error: "Không thể thả tym." });
+      }
+    }
+
+    // Notify the post author (only on add; anti-spam guarded)
+    if (reacted) {
+      const notify = await shouldNotify(event.username, req.user.username, "POST_LIKED", "post", event.id);
+      if (notify) {
+        const { data: profile } = await supabaseAdmin
+          .from("profiles").select("display_name").eq("username", req.user.username).maybeSingle();
+        await createNotification(event.username, "POST_LIKED", "Yêu thích bài đăng",
+          `${profile?.display_name || req.user.username} đã thích bài đăng của bạn.`,
+          { actorUsername: req.user.username, targetType: "post", targetId: event.id });
+      }
+    }
+
+    // Trigger keeps activity_events.like_count in sync, but the trigger
+    // uses the reaction table; recompute defensively here as well.
+    const { count } = await supabaseAdmin
+      .from("social_reactions")
+      .select("id", { count: "exact", head: true })
+      .eq("target_type", "post").eq("target_id", event.id);
+    await supabaseAdmin.from("activity_events").update({ like_count: count || 0 }).eq("id", event.id);
+
+    // Analytics
+    recordActivity(req.user.username, reacted ? "REACTION_ADDED" : "REACTION_REMOVED", "post", event.id, null).catch(() => {});
+
+    res.json({ reacted, likeCount: count || 0 });
+  } catch (e) {
+    console.error("[social.react]", e);
+    res.status(500).json({ error: "Không thể thả tym." });
+  }
 });
 
 export default router;

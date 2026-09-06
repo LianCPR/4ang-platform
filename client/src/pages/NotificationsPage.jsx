@@ -1,27 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import {
-  Bell, BellOff, CheckCheck, Clock, Music, Users, MessageCircle, Star,
-  AlertTriangle, CheckCircle, Send, Headphones, Disc3, Shield, ChevronRight, XCircle
+  BellOff, CheckCheck, AlertTriangle, ChevronRight, MessageCircle
 } from "lucide-react";
 import { api } from "../api";
-import { timeAgo } from "../lib/format";
-
-/* ─── Notification type config ────────────── */
-const NOTIF_CONFIG = {
-  NEW_RELEASE: { icon: Disc3, color: "var(--c-sage-deep)", label: "Phát hành mới" },
-  TRACK_PUBLISHED: { icon: CheckCircle, color: "var(--success)", label: "Đã xuất bản" },
-  ARTIST_FOLLOWED: { icon: Users, color: "var(--c-gold)", label: "Người theo dõi" },
-  ARTIST_APPROVED: { icon: Star, color: "var(--c-sage-deep)", label: "Nghệ sĩ" },
-  ARTIST_REJECTED: { icon: AlertTriangle, color: "var(--danger)", label: "Yêu cầu" },
-  ARTIST_VERIFIED: { icon: Shield, color: "var(--c-sage-deep)", label: "Xác minh" },
-  ARTIST_VERIFICATION_REJECTED: { icon: AlertTriangle, color: "var(--danger)", label: "Xác minh" },
-  SUBMISSION_APPROVED: { icon: CheckCircle, color: "var(--success)", label: "Đã duyệt" },
-  SUBMISSION_REJECTED: { icon: XCircle, color: "var(--danger)", label: "Bị từ chối" },
-  SUBMISSION_PUBLISHED: { icon: Music, color: "var(--c-sage-deep)", label: "Đã phát hành" },
-  SUPPORT_TICKET_UPDATE: { icon: MessageCircle, color: "var(--c-gold)", label: "Hỗ trợ" },
-  SYSTEM: { icon: Bell, color: "var(--text-muted)", label: "Hệ thống" },
-};
+import { timeAgo, gradientFor, hashHue } from "../lib/format";
+import { NOTIFICATION_CONFIG } from "../lib/activity";
 
 /* ─── Group notifications by date ─────────── */
 function groupByDate(notifs) {
@@ -43,8 +27,9 @@ function groupByDate(notifs) {
 
 /* ─── Notification Item ───────────────────── */
 function NotificationItem({ notif, onRead, onNavigate, index }) {
-  const config = NOTIF_CONFIG[notif.type] || NOTIF_CONFIG.SYSTEM;
+  const config = NOTIFICATION_CONFIG[notif.type] || NOTIFICATION_CONFIG.SYSTEM;
   const Icon = config.icon;
+  const isSocial = ["COMMENT_REPLY", "MENTION", "COMMENT_LIKED", "POST_LIKED", "NEW_COMMENT", "ROOM_INVITE"].includes(notif.type);
 
   const handleClick = useCallback(() => {
     if (!notif.read) onRead(notif.id);
@@ -53,12 +38,16 @@ function NotificationItem({ notif, onRead, onNavigate, index }) {
       onNavigate("track", notif.targetId);
     } else if (notif.targetType === "artist" && notif.targetId) {
       onNavigate("artist", notif.targetId);
+    } else if (notif.targetType === "post" && notif.targetId) {
+      onNavigate("post", notif.targetId, notif.metadata?.commentId || null);
+    } else if (notif.targetType === "room" && notif.targetId) {
+      onNavigate("room", notif.targetId);
+    } else if (notif.targetType === "playlist" && notif.targetId) {
+      onNavigate("playlist", notif.targetId);
     } else if (notif.targetType === "artist_application" || notif.targetType === "verified_application") {
       onNavigate("profile");
     } else if (notif.targetType === "submission") {
       onNavigate("dashboard");
-    } else if (notif.targetType === "playlist" && notif.targetId) {
-      onNavigate("playlist", notif.targetId);
     } else if (notif.targetType === "support_ticket") {
       onNavigate("support");
     }
@@ -73,9 +62,18 @@ function NotificationItem({ notif, onRead, onNavigate, index }) {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2, delay: Math.min(index * 0.02, 0.3) }}
     >
-      <div className="notif-icon" style={{ color: config.color, background: config.color + "12" }}>
-        <Icon size={16} />
-      </div>
+      {isSocial ? (
+        <div className="notif-avatar" style={notif.actorAvatar
+          ? { backgroundImage: `url('${notif.actorAvatar}')` }
+          : { background: gradientFor(hashHue(notif.actorUsername || "u")) }
+        }>
+          {!notif.actorAvatar && <span>{(notif.actorDisplayName || "U")[0]}</span>}
+        </div>
+      ) : (
+        <div className="notif-icon" style={{ color: config.color, background: config.color + "12" }}>
+          <Icon size={16} />
+        </div>
+      )}
       <div className="notif-body">
         <div className="notif-header-row">
           <span className="notif-type-badge" style={{ color: config.color }}>{config.label}</span>
@@ -91,7 +89,7 @@ function NotificationItem({ notif, onRead, onNavigate, index }) {
 }
 
 /* ══════════════════════════════════════════ */
-export default function NotificationsPage({ session, onOpenTrack, onOpenArtist }) {
+export default function NotificationsPage({ session, onOpenTrack, onOpenArtist, onOpenPost, onOpenRoom, onOpenPlaylist }) {
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -132,9 +130,12 @@ export default function NotificationsPage({ session, onOpenTrack, onOpenArtist }
     } catch (e) { /* ignore */ }
   }
 
-  function handleNavigate(type, id) {
+  function handleNavigate(type, id, commentId) {
     if (type === "track" && onOpenTrack) onOpenTrack(id);
     else if (type === "artist" && onOpenArtist) onOpenArtist(id);
+    else if (type === "post" && onOpenPost) onOpenPost(id, commentId);
+    else if (type === "room" && onOpenRoom) onOpenRoom(id);
+    else if (type === "playlist" && onOpenPlaylist) onOpenPlaylist(id);
   }
 
   const filtered = filter === "unread"

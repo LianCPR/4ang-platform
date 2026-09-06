@@ -1,25 +1,13 @@
 import { useState, useEffect, useCallback } from "react";
 import { motion } from "framer-motion";
-import { Heart, Music, Users, UserPlus, Share2, ListMusic, Play, Clock, Sparkles, Compass } from "lucide-react";
+import { Heart, MessageCircle, Music, Play, UserPlus, Compass } from "lucide-react";
 import { api } from "../api";
-import { gradientFor, hashHue, timeAgo } from "../lib/format";
-import ArtistBadge from "../components/ArtistBadge";
+import { gradientFor, hashHue, timeAgo, formatCount } from "../lib/format";
+import { ACTIVITY_CONFIG } from "../lib/activity";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
 
-const ACTIVITY_CONFIG = {
-  SONG_LIKED: { icon: Heart, color: "var(--c-rose)", verb: "đã thích" },
-  SONG_SHARED: { icon: Share2, color: "var(--c-sage)", verb: "đã chia sẻ" },
-  SHARED: { icon: Share2, color: "var(--c-sage)", verb: "đã chia sẻ" },
-  PLAYLIST_CREATED: { icon: ListMusic, color: "var(--c-gold)", verb: "đã tạo playlist" },
-  ARTIST_FOLLOWED: { icon: UserPlus, color: "var(--c-sage-deep)", verb: "đã theo dõi" },
-  USER_FOLLOWED: { icon: UserPlus, color: "var(--c-sage-deep)", verb: "đã theo dõi" },
-  NEW_RELEASE: { icon: Music, color: "var(--c-sage)", verb: "đã phát hành" },
-  TRACK_PUBLISHED: { icon: Music, color: "var(--c-sage)", verb: "đã phát hành" },
-  ARTIST_APPROVED: { icon: Sparkles, color: "var(--c-gold)", verb: "đã được xác minh" },
-};
-
-function FeedItem({ activity, onPlay, onOpenArtist, current, isPlaying, session, onFollowUser }) {
+function FeedItem({ activity, onOpenPost, onPlay, onOpenArtist, session, onFollowUser, onReact }) {
   const config = ACTIVITY_CONFIG[activity.eventType] || { icon: Music, color: "var(--text-muted)", verb: "đã tương tác" };
   const Icon = config.icon;
   const target = activity.target;
@@ -31,8 +19,8 @@ function FeedItem({ activity, onPlay, onOpenArtist, current, isPlaying, session,
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.25 }}
     >
-      {/* Header */}
-      <div className="feed-item-header">
+      {/* Header — click opens post detail */}
+      <div className="feed-item-header" onClick={() => onOpenPost && onOpenPost(activity.id)}>
         <div className="feed-avatar" style={activity.avatarUrl
           ? { backgroundImage: `url('${activity.avatarUrl}')` }
           : { background: gradientFor(hashHue(activity.username)) }
@@ -50,12 +38,12 @@ function FeedItem({ activity, onPlay, onOpenArtist, current, isPlaying, session,
 
       {/* Message */}
       {activity.message && (
-        <p className="feed-message">{activity.message}</p>
+        <p className="feed-message" onClick={() => onOpenPost && onOpenPost(activity.id)}>{activity.message}</p>
       )}
 
       {/* Target content */}
       {target && target.type === "track" && (
-        <div className="feed-track-card" onClick={() => onPlay && onPlay(target.id)}>
+        <div className="feed-track-card" onClick={() => onOpenPost && onOpenPost(activity.id)}>
           <div className="feed-track-art" style={target.coverUrl
             ? { backgroundImage: `url('${target.coverUrl}')` }
             : { background: gradientFor(hashHue(target.title)) }
@@ -72,13 +60,13 @@ function FeedItem({ activity, onPlay, onOpenArtist, current, isPlaying, session,
       )}
 
       {target && target.type === "playlist" && (
-        <div className="feed-track-card">
+        <div className="feed-track-card" onClick={() => onOpenPost && onOpenPost(activity.id)}>
           <div className="feed-track-art" style={target.coverUrl
             ? { backgroundImage: `url('${target.coverUrl}')` }
             : { background: gradientFor(hashHue(target.title)) }
           }>
             <div className="feed-track-play">
-              <ListMusic size={16} />
+              <Music size={16} />
             </div>
           </div>
           <div className="feed-track-info">
@@ -117,11 +105,31 @@ function FeedItem({ activity, onPlay, onOpenArtist, current, isPlaying, session,
           )}
         </div>
       )}
+
+      {/* Stats + actions */}
+      <div className="feed-item-stats">
+        <span>{formatCount(activity.likeCount || 0)} tym</span>
+        <span>{formatCount(activity.commentCount || 0)} bình luận</span>
+      </div>
+      <div className="feed-item-actions">
+        <button
+          type="button"
+          className={"feed-action-btn" + (activity.reacted ? " active" : "")}
+          onClick={() => onReact && onReact(activity)}
+        >
+          <Heart size={16} fill={activity.reacted ? "currentColor" : "none"} />
+          <span>Tym</span>
+        </button>
+        <button type="button" className="feed-action-btn" onClick={() => onOpenPost && onOpenPost(activity.id)}>
+          <MessageCircle size={16} />
+          <span>{formatCount(activity.commentCount || 0)}</span>
+        </button>
+      </div>
     </motion.div>
   );
 }
 
-export default function SocialFeedPage({ session, onPlay, current, isPlaying, onOpenArtist }) {
+export default function SocialFeedPage({ session, onPlay, current, isPlaying, onOpenArtist, onOpenPost }) {
   const [activities, setActivities] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -158,6 +166,24 @@ export default function SocialFeedPage({ session, onPlay, current, isPlaying, on
     try {
       await api.followUser(username);
     } catch (e) { /* ignore */ }
+  };
+
+  // Optimistic post reaction toggle
+  const handleReact = async (activity) => {
+    const was = activity.reacted;
+    setActivities((prev) => prev.map((a) => a.id === activity.id
+      ? { ...a, reacted: !was, likeCount: (a.likeCount || 0) + (was ? -1 : 1) }
+      : a));
+    try {
+      const res = await api.reactPost(activity.id);
+      setActivities((prev) => prev.map((a) => a.id === activity.id
+        ? { ...a, reacted: res.reacted, likeCount: res.likeCount }
+        : a));
+    } catch (e) {
+      setActivities((prev) => prev.map((a) => a.id === activity.id
+        ? { ...a, reacted: was, likeCount: (a.likeCount || 0) + (was ? 1 : -1) }
+        : a));
+    }
   };
 
   if (loading) {
@@ -213,15 +239,14 @@ export default function SocialFeedPage({ session, onPlay, current, isPlaying, on
             <FeedItem
               key={activity.id}
               activity={activity}
+              onOpenPost={onOpenPost}
               onPlay={(trackId) => {
-                // Find track in loaded tracks and play it
                 if (onPlay) onPlay([], 0, trackId);
               }}
               onOpenArtist={onOpenArtist}
-              current={current}
-              isPlaying={isPlaying}
               session={session}
               onFollowUser={handleFollowUser}
+              onReact={handleReact}
             />
           ))}
 

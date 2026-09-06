@@ -191,7 +191,7 @@ export async function shapeTrack(row) {
   const [likesResult, savesResult, commentsResult, uploaderArtist, credits] = await Promise.all([
     supabaseAdmin.from("track_likes").select("username").eq("track_id", row.id),
     supabaseAdmin.from("track_saves").select("username").eq("track_id", row.id),
-    supabaseAdmin.from("track_comments").select("*").eq("track_id", row.id).order("created_at"),
+    supabaseAdmin.from("social_comments").select("*").eq("target_type", "track").eq("target_id", String(row.id)).eq("is_deleted", false).order("created_at"),
     row.uploader_username
       ? supabaseAdmin.from("artist_profiles").select("verification_status").eq("username", row.uploader_username).maybeSingle()
       : Promise.resolve({ data: null }),
@@ -201,7 +201,7 @@ export async function shapeTrack(row) {
   const likedBy = (likesResult.data || []).map(r => r.username);
   const savedBy = (savesResult.data || []).map(r => r.username);
   const comments = (commentsResult.data || []).map(c => ({
-    id: c.id, username: c.username, displayName: c.display_name || "", text: c.text, createdAt: typeof c.created_at === "string" ? new Date(c.created_at).getTime() : c.created_at,
+    id: c.id, username: c.author_username, displayName: c.author_display_name || "", text: c.text, createdAt: typeof c.created_at === "string" ? new Date(c.created_at).getTime() : c.created_at,
   }));
   const primary = credits.find(c => c.isPrimary);
   const featured = credits.filter(c => c.role === "featured");
@@ -388,12 +388,13 @@ export function shapeNotification(row) {
     targetId: row.target_id || null,
     title: row.title,
     body: row.body || "",
+    metadata: row.metadata || null,
     read: !!row.is_read,
     createdAt: typeof row.created_at === "string" ? new Date(row.created_at).getTime() : (typeof row.created_at === "number" ? row.created_at : 0),
   };
 }
 
-export async function createNotification(username, type, title, body, { actorUsername = null, targetType = null, targetId = null } = {}) {
+export async function createNotification(username, type, title, body, { actorUsername = null, targetType = null, targetId = null, metadata = null } = {}) {
   const { error } = await supabaseAdmin.from("notifications").insert({
     id: randomId(),
     username,
@@ -401,6 +402,7 @@ export async function createNotification(username, type, title, body, { actorUse
     actor_username: actorUsername,
     target_type: targetType,
     target_id: targetId,
+    metadata: metadata || null,
     title,
     body: body || "",
     is_read: false,

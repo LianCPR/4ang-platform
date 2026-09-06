@@ -20,7 +20,7 @@ import BottomNav from "./components/BottomNav";
 import MiniPlayer from "./components/MiniPlayer";
 import FullPlayer from "./components/FullPlayer";
 import Sheet from "./components/Sheet";
-import CommentsPanel from "./components/CommentsPanel";
+import CommentsSheet from "./components/CommentsSheet";
 import LyricsPanel from "./components/LyricsPanel";
 import QueuePanel from "./components/QueuePanel";
 import AddToPlaylistSheet from "./components/AddToPlaylistSheet";
@@ -39,6 +39,7 @@ const SubmitMusicPage = lazy(() => import("./pages/SubmitMusicPage"));
 const PlaylistDetailPage = lazy(() => import("./pages/PlaylistDetailPage"));
 const NotificationsPage = lazy(() => import("./pages/NotificationsPage"));
 const SocialFeedPage = lazy(() => import("./pages/SocialFeedPage"));
+const SocialPostDetailPage = lazy(() => import("./pages/SocialPostDetailPage"));
 const SearchPage = lazy(() => import("./pages/SearchPage"));
 import ArtistProfileForm from "./components/ArtistProfileForm";
 const BecomeArtistPage = lazy(() => import("./pages/BecomeArtistPage"));
@@ -48,6 +49,8 @@ const ExplorePage = lazy(() => import("./pages/ExplorePage"));
 const ListeningStatsPage = lazy(() => import("./pages/ListeningStatsPage"));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage"));
 const AccessDeniedPage = lazy(() => import("./pages/AccessDeniedPage"));
+const RoomsPage = lazy(() => import("./pages/RoomsPage"));
+const RoomPage = lazy(() => import("./pages/RoomPage"));
 import SmartMixRail from "./components/SmartMixRail";
 import OnboardingPage from "./pages/OnboardingPage";
 
@@ -106,6 +109,12 @@ export default function App() {
   const [unreadNotifCount, setUnreadNotifCount] = useState(0);
   const [sleepTimer, setSleepTimer] = useState(null); // null = off, number = minutes
   const [sleepTimerRemaining, setSleepTimerRemaining] = useState(null);
+
+  // Phase 2.1
+  const [viewingPost, setViewingPost] = useState(null); // { id, commentId }
+
+  // Phase 2.2
+  const [viewingRoom, setViewingRoom] = useState(null); // room id (string)
 
   // Deep linking
   const [searchParams, setSearchParams] = useSearchParams();
@@ -190,14 +199,18 @@ export default function App() {
     const album = searchParams.get("album");
     const q = searchParams.get("q");
 
-    // Path-based deep links: /artist/:id, /playlist/:id, /track/:id
+    // Path-based deep links: /artist/:id, /playlist/:id, /track/:id, /post/:id
     const pathArtist = path.match(/^\/artist\/([^/]+)/);
     const pathPlaylist = path.match(/^\/playlist\/(\d+)/);
     const pathTrack = path.match(/^\/track\/(\d+)/);
+    const pathPost = path.match(/^\/post\/([^/?]+)/);
+    const pathRoom = path.match(/^\/rooms\/([^/?]+)/);
 
     if (pathArtist) { setViewingArtist(pathArtist[1]); setActiveTab("artist"); }
     else if (pathPlaylist) { setViewingPlaylist(parseInt(pathPlaylist[1])); }
     else if (pathTrack) { /* will be resolved after tracks load */ }
+    else if (pathPost) { setViewingPost({ id: pathPost[1], commentId: searchParams.get("comment") || null }); setActiveTab("social"); }
+    else if (pathRoom) { setViewingRoom(pathRoom[1]); setActiveTab("rooms"); }
     else if (artist) { setViewingArtist(artist); setActiveTab("artist"); }
     else if (playlist) { setViewingPlaylist(playlist); }
     else if (track) { /* will be resolved after tracks load */ }
@@ -210,12 +223,18 @@ export default function App() {
   function goTab(tab) { setActiveTab(tab); syncUrl(tab); }
   function goArtist(username) { setViewingArtist(username); setActiveTab("artist"); syncUrl("artist", { artist: username }); }
   function goPlaylist(id) { setViewingPlaylist(id); syncUrl("playlist", { playlist: id }); }
+  function goPost(id, commentId) { setViewingPost({ id, commentId: commentId || null }); setActiveTab("social"); syncUrl("post", { post: id, comment: commentId || null }); }
+  function goRoom(id) { if (id) { setViewingRoom(id); setActiveTab("rooms"); syncUrl("room", { room: id }); } }
+  function goRooms() { setViewingRoom(null); setActiveTab("rooms"); syncUrl("rooms"); }
   function syncUrl(tab, extras) {
     let urlPath = "/";
     if (extras?.artist) urlPath = "/artist/" + encodeURIComponent(extras.artist);
     else if (extras?.playlist) urlPath = "/playlist/" + extras.playlist;
     else if (extras?.track) urlPath = "/track/" + extras.track;
     else if (extras?.q) urlPath = "/search?q=" + encodeURIComponent(extras.q);
+    else if (extras?.post) urlPath = "/post/" + encodeURIComponent(extras.post) + (extras.comment ? "?comment=" + encodeURIComponent(extras.comment) : "");
+    else if (extras?.room) urlPath = "/rooms/" + encodeURIComponent(extras.room);
+    else if (extras?.rooms) urlPath = "/rooms";
     window.history.replaceState(null, "", urlPath);
   }
 
@@ -1097,7 +1116,7 @@ export default function App() {
                     onOpenPlaylist={goPlaylist}
                   />
                 )}
-                {activeTab === "social" && (
+                {activeTab === "social" && !viewingPost && (
                   <SocialFeedPage
                     session={session}
                     current={current} isPlaying={isPlaying}
@@ -1107,6 +1126,40 @@ export default function App() {
                         if (i >= 0) playTrackAtIndex(tracks, i);
                       } else if (list && idx != null) playTrackAtIndex(list, idx);
                     }}
+                    onOpenArtist={goArtist}
+                    onOpenPost={(id) => { setViewingPost({ id, commentId: null }); }}
+                  />
+                )}
+                {activeTab === "social" && viewingPost && (
+                  <SocialPostDetailPage
+                    postId={viewingPost.id}
+                    session={session}
+                    commentId={viewingPost.commentId}
+                    onBack={() => { setViewingPost(null); syncUrl("social"); }}
+                    onPlay={(trackId) => {
+                      const i = tracks.findIndex((t) => t.id === trackId);
+                      if (i >= 0) playTrackAtIndex(tracks, i);
+                    }}
+                    onOpenArtist={goArtist}
+                  />
+                )}
+                {activeTab === "rooms" && !viewingRoom && (
+                  <RoomsPage
+                    session={session} showToast={showToast}
+                    tracks={allKnownTracks}
+                    onOpenRoom={goRoom}
+                  />
+                )}
+                {activeTab === "rooms" && viewingRoom && (
+                  <RoomPage
+                    roomId={viewingRoom}
+                    session={session} showToast={showToast}
+                    tracks={allKnownTracks}
+                    goBack={goRooms}
+                    current={current} isPlaying={isPlaying} progress={progress}
+                    playTrackAtIndex={playTrackAtIndex} togglePlayPause={togglePlayPause}
+                    handleSeek={handleSeek} handleNext={handleNext} handlePrev={handlePrev}
+                    audioRef={audioRef} ytPlayerRef={ytPlayerRef}
                     onOpenArtist={goArtist}
                   />
                 )}
@@ -1133,6 +1186,8 @@ export default function App() {
                       setActiveTab("home");
                     }}
                     onOpenArtist={goArtist}
+                    onOpenPost={goPost}
+                    onOpenRoom={goRoom}
                   />
                 )}
                 {activeTab === "saved" && <SavedPage savedList={savedList} {...sharedPageProps} />}
@@ -1255,7 +1310,16 @@ export default function App() {
 
 
       <Sheet open={sheet && sheet.type === "comments"} onClose={() => setSheet(null)} labelledBy="comments-title">
-        <CommentsPanel track={sheetTrack} draft={commentDraft} onDraftChange={setCommentDraft} onSubmit={() => submitComment(sheet.trackId)} />
+        <CommentsSheet
+          open={sheet && sheet.type === "comments"}
+          targetType="track"
+          targetId={sheet?.trackId ? String(sheet.trackId) : null}
+          title={sheetTrack?.title}
+          subtitle={sheetTrack?.uploaderDisplayName}
+          coverUrl={sheetTrack?.coverUrl}
+          session={session}
+          onOpenUser={goArtist}
+        />
       </Sheet>
 
       <Sheet open={sheet && sheet.type === "lyrics"} onClose={() => setSheet(null)} labelledBy="lyrics-title">
