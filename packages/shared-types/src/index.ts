@@ -14,3 +14,4 @@ export * from "./recommendation";
 export * from "./intelligence";
 export * from "./assistant";
 export * from "./api";
+export * from "./audio";
