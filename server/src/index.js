@@ -27,6 +27,8 @@ import assistantRoutes from "./routes/assistant.js";
 import eventsRoutes from "./routes/events.js";
 import { usingDefaultSecret } from "./auth.js";
 import { securityHeaders } from "./middleware/security-headers.js";
+import { requestIdMiddleware, requestLogger } from "./middleware/observability.js";
+import { requestTimeout } from "./middleware/timeout.js";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -52,8 +54,11 @@ app.use(cors({
     callback(new Error("CORS origin not allowed"));
   },
 }));
-app.use(express.json({ limit: "1mb" }));
+app.use(requestIdMiddleware);
 app.use(securityHeaders);
+app.use(requestLogger);
+app.use(requestTimeout(30_000));
+app.use(express.json({ limit: "1mb" }));
 
 app.get("/api/health", (req, res) => {
   res.json({
@@ -115,8 +120,16 @@ if (process.env.NODE_ENV === "production" || process.env.SERVE_CLIENT === "true"
 }
 
 app.use((err, req, res, next) => {
-  // Log internally but never expose stack traces or internals to clients.
-  console.error("[error]", err.message || err);
+  // Structured error logging — never expose internals to clients.
+  console.error(JSON.stringify({
+    level: "ERROR",
+    time: new Date().toISOString(),
+    requestId: req?.requestId,
+    event: "unhandled_error",
+    message: err?.message || "Unknown error",
+    path: req?.path,
+    method: req?.method,
+  }));
   if (process.env.NODE_ENV !== "production") console.error(err.stack);
   res.status(500).json({ error: "Lỗi server. Vui lòng thử lại sau." });
 });
