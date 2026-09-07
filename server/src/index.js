@@ -24,6 +24,7 @@ import artistPostRoutes from "./routes/artist-posts.js";
 import recommendationRoutes from "./routes/recommendations.js";
 import aiRoutes from "./routes/ai.js";
 import assistantRoutes from "./routes/assistant.js";
+import eventsRoutes from "./routes/events.js";
 import { usingDefaultSecret } from "./auth.js";
 
 const app = express();
@@ -79,6 +80,7 @@ app.use("/api/artist-posts", artistPostRoutes);
 app.use("/api/recommendations", recommendationRoutes);
 app.use("/api/ai", aiRoutes);
 app.use("/api/assistant", assistantRoutes);
+app.use("/api/events", eventsRoutes);
 // Serve client build in production (for standalone deployment)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

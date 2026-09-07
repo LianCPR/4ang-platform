@@ -16,3 +16,4 @@ export * from "./assistant";
 export * from "./api";
 export * from "./audio";
 export * from "./identity";
+export * from "./events";

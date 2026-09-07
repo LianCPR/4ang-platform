@@ -13,7 +13,9 @@ export { discoveryApi } from "./discovery";
 export { socialApi } from "./social";
 export { recommendationsApi } from "./recommendations";
 export { assistantApi } from "./assistant";
+export { eventsApi } from "./events";
 
 // Re-export types for convenience
 export type { RequestOptions, ApiResponse } from "./client";
 export type { ApiClientConfig } from "./config";
+export type { UserEvent, EventBatch, PlaybackEvent } from "./events";
