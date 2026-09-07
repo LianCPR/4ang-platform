@@ -197,9 +197,15 @@ pinRelease: (releaseId) => request("/artists/me/pinned-release", { method: "POST
   discoverSocial: () => request("/discover/social"),
   discoverClick: (section, type, id) => request("/discover/click", { method: "POST", body: { section, type, id } }),
 
-  // --- Phase 3.0: Recommendation Engine ---
+  // --- Phase 3.0 + 3.1: Recommendation Engine ---
   forYou: (limit, context) => request("/recommendations/for-you" + "?limit=" + (limit || 20) + (context ? "&context=" + context : "")),
   recFeedback: (trackId, action) => request("/recommendations/feedback", { method: "POST", body: { trackId, action } }),
+  dailyMix: () => request("/recommendations/daily-mix"),
+  smartRadio: (trackId) => request("/recommendations/smart-radio?trackId=" + encodeURIComponent(trackId)),
+  similarSongs: (trackId, limit) => request("/recommendations/similar-songs?trackId=" + encodeURIComponent(trackId) + (limit ? "&limit=" + limit : "")),
+  similarArtists: (limit) => request("/recommendations/similar-artists" + (limit ? "?limit=" + limit : "")),
+  tasteProfile: () => request("/recommendations/taste-profile"),
+  notInterested: (trackId, blockArtist) => request("/recommendations/not-interested", { method: "POST", body: { trackId, blockArtist } }),
 
   // --- Phase 8: Notifications ---
   notifications: (limit) => request("/notifications" + (limit ? "?limit=" + limit : "")),

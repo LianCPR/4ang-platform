@@ -133,6 +133,7 @@ export default function DiscoverPage({
   const [becauseYouListened, setBecauseYouListened] = useState([]);
   const [forYouTracks, setForYouTracks] = useState([]);
   const [forYouReasons, setForYouReasons] = useState([]);
+  const [dailyMixes, setDailyMixes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -152,6 +153,7 @@ export default function DiscoverPage({
       ["recommendations", api.recommendations(10)],
       ["becauseYouListened", api.becauseYouListened(8)],
       ["forYou", session ? api.forYou(12, "home") : Promise.resolve({ tracks: [], reasons: [] })],
+      ["dailyMix", session ? api.dailyMix() : Promise.resolve({ mixes: [] })],
     ];
     await Promise.allSettled(
       fetches.map(([key, promise]) =>
@@ -168,6 +170,7 @@ export default function DiscoverPage({
     setBecauseYouListened(results.becauseYouListened?.tracks || []);
     setForYouTracks(results.forYou?.tracks || []);
     setForYouReasons(results.forYou?.reasons || []);
+    setDailyMixes(results.dailyMix?.mixes || []);
     // Show error only if ALL API calls failed and no parent fallback data
     if (failures.length === fetches.length && tracks.length === 0) {
       setError(failures[0]?.error?.message || "Không thể tải dữ liệu khám phá.");
@@ -314,6 +317,47 @@ export default function DiscoverPage({
                 >
                   <Play size={14} fill="currentColor" />
                 </button>
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
+
+      {/* ── DAILY MIX ── */}
+      {session && dailyMixes.length > 0 && (
+        <Section delay={0.06} className="disc-section">
+          <div className="disc-section-head">
+            <h2>DAILY MIX</h2>
+            <span className="disc-section-sub">Dành riêng cho bạn</span>
+          </div>
+          <div className="disc-daily-mix-grid">
+            {dailyMixes.map((mix) => (
+              <div key={mix.id} className="disc-daily-mix-card">
+                <div className="disc-daily-mix-art">
+                  {mix.tracks.slice(0, 4).map((t, i) => (
+                    <div
+                      key={t.id}
+                      className="disc-daily-mix-tile"
+                      style={t.coverUrl
+                        ? { backgroundImage: `url('${t.coverUrl}')` }
+                        : { background: gradientFor(hashHue(t.title)) }
+                      }
+                    />
+                  ))}
+                </div>
+                <div className="disc-daily-mix-info">
+                  <div className="disc-daily-mix-title">{mix.title}</div>
+                  <div className="disc-daily-mix-desc">{mix.description}</div>
+                </div>
+                <div className="disc-daily-mix-actions">
+                  <button
+                    className="disc-daily-mix-play"
+                    onClick={() => mix.tracks.length > 0 && playFrom(mix.tracks, 0)}
+                    aria-label={`Play ${mix.title}`}
+                  >
+                    <Play size={18} fill="white" />
+                  </button>
+                </div>
               </div>
             ))}
           </div>
