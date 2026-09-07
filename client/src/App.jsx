@@ -39,6 +39,7 @@ const SubmitMusicPage = lazy(() => import("./pages/SubmitMusicPage"));
 const PlaylistDetailPage = lazy(() => import("./pages/PlaylistDetailPage"));
 const NotificationsPage = lazy(() => import("./pages/NotificationsPage"));
 const SocialFeedPage = lazy(() => import("./pages/SocialFeedPage"));
+const AssistantPage = lazy(() => import("./pages/AssistantPage"));
 const SocialPostDetailPage = lazy(() => import("./pages/SocialPostDetailPage"));
 const SearchPage = lazy(() => import("./pages/SearchPage"));
 import ArtistProfileForm from "./components/ArtistProfileForm";
@@ -209,7 +210,7 @@ export default function App() {
     if (pathArtist) { setViewingArtist(pathArtist[1]); setActiveTab("artist"); }
     else if (pathPlaylist) { setViewingPlaylist(parseInt(pathPlaylist[1])); }
     else if (pathTrack) { /* will be resolved after tracks load */ }
-    else if (pathPost) { setViewingPost({ id: pathPost[1], commentId: searchParams.get("comment") || null }); setActiveTab("social"); }
+    else if (pathPost) { setViewingPost({ id: pathPost[1], commentId: searchParams.get("comment") || null, kind: searchParams.get("kind") || null }); setActiveTab("social"); }
     else if (pathRoom) { setViewingRoom(pathRoom[1]); setActiveTab("rooms"); }
     else if (artist) { setViewingArtist(artist); setActiveTab("artist"); }
     else if (playlist) { setViewingPlaylist(playlist); }
@@ -223,7 +224,7 @@ export default function App() {
   function goTab(tab) { setActiveTab(tab); syncUrl(tab); }
   function goArtist(username) { setViewingArtist(username); setActiveTab("artist"); syncUrl("artist", { artist: username }); }
   function goPlaylist(id) { setViewingPlaylist(id); syncUrl("playlist", { playlist: id }); }
-  function goPost(id, commentId) { setViewingPost({ id, commentId: commentId || null }); setActiveTab("social"); syncUrl("post", { post: id, comment: commentId || null }); }
+  function goPost(id, commentId, kind) { setViewingPost({ id, commentId: commentId || null, kind: kind || null }); setActiveTab("social"); syncUrl("post", { post: id, comment: commentId || null, kind: kind || null }); }
   function goRoom(id) { if (id) { setViewingRoom(id); setActiveTab("rooms"); syncUrl("room", { room: id }); } }
   function goRooms() { setViewingRoom(null); setActiveTab("rooms"); syncUrl("rooms"); }
   function syncUrl(tab, extras) {
@@ -232,7 +233,12 @@ export default function App() {
     else if (extras?.playlist) urlPath = "/playlist/" + extras.playlist;
     else if (extras?.track) urlPath = "/track/" + extras.track;
     else if (extras?.q) urlPath = "/search?q=" + encodeURIComponent(extras.q);
-    else if (extras?.post) urlPath = "/post/" + encodeURIComponent(extras.post) + (extras.comment ? "?comment=" + encodeURIComponent(extras.comment) : "");
+    else if (extras?.post) {
+      const qs = [];
+      if (extras.comment) qs.push("comment=" + encodeURIComponent(extras.comment));
+      if (extras.kind) qs.push("kind=" + encodeURIComponent(extras.kind));
+      urlPath = "/post/" + encodeURIComponent(extras.post) + (qs.length ? "?" + qs.join("&") : "");
+    }
     else if (extras?.room) urlPath = "/rooms/" + encodeURIComponent(extras.room);
     else if (extras?.rooms) urlPath = "/rooms";
     window.history.replaceState(null, "", urlPath);
@@ -1059,6 +1065,7 @@ export default function App() {
                     onShareArtist={(data) => openShare("artist", data)}
                     onPlayNext={playNext} onAddToQueue={addToQueue}
                     onAddToPlaylist={(trackId) => setAddToPlaylistTrackId(trackId)}
+                    onOpenPost={goPost}
                   />
                 )}
                 {activeTab === "explore" && (
@@ -1101,6 +1108,7 @@ export default function App() {
                     onOpenGenre={(name) => setViewingGenre(name)}
                     onOpenPlaylist={goPlaylist}
                     onOpenRoom={goRoom}
+                    onOpenPost={goPost}
                     showToast={showToast}
                   />
                 )}
@@ -1129,7 +1137,7 @@ export default function App() {
                       } else if (list && idx != null) playTrackAtIndex(list, idx);
                     }}
                     onOpenArtist={goArtist}
-                    onOpenPost={(id) => { setViewingPost({ id, commentId: null }); }}
+                    onOpenPost={goPost}
                   />
                 )}
                 {activeTab === "social" && viewingPost && (
@@ -1137,6 +1145,7 @@ export default function App() {
                     postId={viewingPost.id}
                     session={session}
                     commentId={viewingPost.commentId}
+                    kind={viewingPost.kind || "auto"}
                     onBack={() => { setViewingPost(null); syncUrl("social"); }}
                     onPlay={(trackId) => {
                       const i = tracks.findIndex((t) => t.id === trackId);
@@ -1224,6 +1233,16 @@ export default function App() {
                     onOpenSubmitMusic={openSubmitMusic}
                     submissionsRefreshKey={submissionsRefreshKey}
                     onOpenArtist={() => { setViewingArtist(session.username); goTab("artist"); }}
+                    onOpenPost={goPost}
+                  />
+                )}
+                {activeTab === "assistant" && (
+                  <AssistantPage
+                    session={session}
+                    currentTrack={current}
+                    onPlay={playTrackAtIndex}
+                    onLike={toggleLike}
+                    onAddToQueue={addToQueue}
                   />
                 )}
                 </Suspense>

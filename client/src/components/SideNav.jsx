@@ -1,12 +1,13 @@
 import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Home, Compass, Music, Users, Library, Radio, UploadCloud, LogOut, Bell, Search, Sun, Moon } from "lucide-react";
+import { Home, Compass, Music, Users, Library, Radio, UploadCloud, LogOut, Bell, Search, Sun, Moon, Sparkles } from "lucide-react";
 import { gradientFor, hashHue, initials } from "../lib/format";
 
 const NAV_ITEMS = [
   { id: "home", label: "HOME" },
   { id: "explore", label: "EXPLORE" },
   { id: "discover", label: "DISCOVER" },
+  { id: "assistant", label: "AI", icon: Sparkles },
   { id: "social", label: "SOCIAL" },
   { id: "rooms", label: "ROOMS" },
   { id: "library", label: "LIBRARY" },

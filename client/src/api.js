@@ -405,6 +405,18 @@ pinArtistPost: (id) => request("/artist-posts/" + encodeURIComponent(id) + "/pin
     invites: () => request("/rooms/invites/list"),
   },
 
+  // ═══ ASSISTANT (Phase 3.3) ═══
+  assistant: {
+    message: (message, conversationId, context) => request("/assistant/message", {
+      method: "POST",
+      body: { message, conversationId, context },
+    }),
+    conversations: (limit) => request("/assistant/conversations?limit=" + (limit || 20)),
+    conversationMessages: (id) => request("/assistant/conversations/" + encodeURIComponent(id) + "/messages"),
+    deleteConversation: (id) => request("/assistant/conversations/" + encodeURIComponent(id), { method: "DELETE" }),
+    status: () => request("/assistant/status"),
+  },
+
   // ═══ AI (Phase 3.2) ═══
   ai: {
     status: () => request("/ai/status"),
