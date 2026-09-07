@@ -5057,6 +5057,19 @@
   color: var(--text-bright);
   text-decoration: underline;
 }
+.disc-reason-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--c-sage);
+  background: rgba(154, 166, 138, 0.12);
+  border-radius: 8px;
+  white-space: nowrap;
+  vertical-align: middle;
+  line-height: 1.4;
+}
 .disc-row-dur {
   font-size: 10px;
   color: var(--text-faint);

@@ -123,7 +123,7 @@ function SkeletonList({ count = 5 }) {
 export default function DiscoverPage({
   session, tracks, current, isPlaying, progress,
   onPlay, onLike, onSave, onShare, onComment, onLyrics, onAddToPlaylist,
-  onOpenArtist, onOpenGenre, onOpenPlaylist, onOpenRoom, showToast,
+  onOpenArtist, onOpenGenre, onOpenPlaylist, onOpenRoom, onOpenPost, showToast,
 }) {
   const [trending, setTrending] = useState([]);
   const [newReleases, setNewReleases] = useState([]);
@@ -131,6 +131,8 @@ export default function DiscoverPage({
   const [genres, setGenres] = useState([]);
   const [recommendations, setRecommendations] = useState([]);
   const [becauseYouListened, setBecauseYouListened] = useState([]);
+  const [forYouTracks, setForYouTracks] = useState([]);
+  const [forYouReasons, setForYouReasons] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -149,6 +151,7 @@ export default function DiscoverPage({
       ["genres", api.discoverGenres()],
       ["recommendations", api.recommendations(10)],
       ["becauseYouListened", api.becauseYouListened(8)],
+      ["forYou", session ? api.forYou(12, "home") : Promise.resolve({ tracks: [], reasons: [] })],
     ];
     await Promise.allSettled(
       fetches.map(([key, promise]) =>
@@ -163,6 +166,8 @@ export default function DiscoverPage({
     setGenres(results.genres?.genres || []);
     setRecommendations(results.recommendations?.tracks || []);
     setBecauseYouListened(results.becauseYouListened?.tracks || []);
+    setForYouTracks(results.forYou?.tracks || []);
+    setForYouReasons(results.forYou?.reasons || []);
     // Show error only if ALL API calls failed and no parent fallback data
     if (failures.length === fetches.length && tracks.length === 0) {
       setError(failures[0]?.error?.message || "Không thể tải dữ liệu khám phá.");
@@ -188,6 +193,10 @@ export default function DiscoverPage({
   const displayRecs = useMemo(() =>
     recommendations.length > 0 ? recommendations : becauseYouListened.length > 0 ? becauseYouListened : tracks.slice(0, 8),
     [recommendations, becauseYouListened, tracks]
+  );
+  const displayForYou = useMemo(() =>
+    forYouTracks.length > 0 ? forYouTracks : displayRecs,
+    [forYouTracks, displayRecs]
   );
   const allGenres = useMemo(() =>
     genres.length > 0 ? genres :
@@ -258,6 +267,59 @@ export default function DiscoverPage({
         </div>
       </Section>
 
+      {/* ── FOR YOU — personalized recommendations ── */}
+      {session && displayForYou.length > 0 && (
+        <Section delay={0.04} className="disc-section">
+          <div className="disc-section-head">
+            <h2>DÀNH RIÊNG CHO BẠN</h2>
+            <span className="disc-section-sub">
+              {forYouReasons.length > 0 ? forYouReasons.join(" · ") : "Dựa trên gu nghe nhạc của bạn"}
+            </span>
+          </div>
+          <div className="disc-song-list">
+            {displayForYou.slice(0, 8).map((t, i) => (
+              <div
+                key={t.id}
+                className={"disc-song-row" + (isCur(t) ? " disc-row-active" : "")}
+                onClick={() => playFrom(displayForYou, i)}
+              >
+                <span className="disc-rank">{isCur(t) && isPlaying
+                  ? <span className="disc-eq"><span /><span /><span /></span>
+                  : (i + 1)}</span>
+                <div
+                  className="disc-row-art"
+                  style={t.coverUrl
+                    ? { backgroundImage: `url('${t.coverUrl}')` }
+                    : { background: gradientFor(hashHue(t.title)) }
+                  }
+                />
+                <div className="disc-row-info">
+                  <div className="disc-row-title">{t.title}</div>
+                  <div className="disc-row-artist">
+                    {onOpenArtist && t.uploaderUsername ? (
+                      <span className="disc-artist-link" onClick={(e) => { e.stopPropagation(); onOpenArtist(t.uploaderUsername); }}>
+                        {artistName(t)}
+                      </span>
+                    ) : artistName(t)}
+                    {t.reasons && t.reasons.length > 0 && (
+                      <span className="disc-reason-badge">{t.reasons[0]}</span>
+                    )}
+                  </div>
+                </div>
+                <span className="disc-row-dur"><Clock size={11} /> {formatTime(t.duration || 0)}</span>
+                <button
+                  className="disc-row-play"
+                  aria-label="Play"
+                  onClick={(e) => { e.stopPropagation(); playFrom(displayForYou, i); }}
+                >
+                  <Play size={14} fill="currentColor" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
+
       {/* ── SOCIAL DISCOVERY 2.0 ── */}
       <SocialDiscovery
         session={session}
@@ -266,6 +328,7 @@ export default function DiscoverPage({
         onOpenArtist={onOpenArtist}
         onOpenPlaylist={onOpenPlaylist}
         onOpenRoom={onOpenRoom}
+        onOpenPost={onOpenPost}
         showToast={showToast}
       />
 

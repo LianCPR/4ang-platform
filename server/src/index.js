@@ -20,6 +20,8 @@ import migrateRoutes from "./routes/migrate.js";
 import socialRoutes from "./routes/social.js";
 import commentsRoutes from "./routes/comments.js";
 import roomsRoutes, { startRoomHousekeeping } from "./routes/rooms.js";
+import artistPostRoutes from "./routes/artist-posts.js";
+import recommendationRoutes from "./routes/recommendations.js";
 import { usingDefaultSecret } from "./auth.js";
 
 const app = express();
@@ -71,6 +73,8 @@ app.use("/api/releases", releaseRoutes);
 app.use("/api/artist-applications", artistAppRoutes);
 app.use("/api/support", supportRoutes);
 app.use("/api/migrate", migrateRoutes);
+app.use("/api/artist-posts", artistPostRoutes);
+app.use("/api/recommendations", recommendationRoutes);
 // Serve client build in production (for standalone deployment)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

@@ -150,9 +150,11 @@ export const api = {
 
   // Releases (Phase 9)
   listReleases: (params) => request("/releases" + (params ? "?" + new URLSearchParams(params).toString() : "")),
-  getRelease: (id) => request("/releases/" + id),
-  createRelease: (payload) => request("/releases", { method: "POST", body: payload }),
-  updateRelease: (id, payload) => request("/releases/" + id, { method: "PATCH", body: payload }),
+getRelease: (id) => request("/releases/" + id),
+createRelease: (payload) => request("/releases", { method: "POST", body: payload }),
+updateRelease: (id, payload) => request("/releases/" + id, { method: "PATCH", body: payload }),
+myReleases: () => request("/releases/mine"),
+pinRelease: (releaseId) => request("/artists/me/pinned-release", { method: "POST", body: { releaseId } }),
   addTrackToRelease: (releaseId, trackId) => request("/releases/" + releaseId + "/tracks", { method: "POST", body: { trackId } }),
   removeTrackFromRelease: (releaseId, trackId) => request("/releases/" + releaseId + "/tracks/" + trackId, { method: "DELETE" }),
   submitRelease: (id) => request("/releases/" + id + "/submit", { method: "POST" }),
@@ -195,6 +197,10 @@ export const api = {
   discoverSocial: () => request("/discover/social"),
   discoverClick: (section, type, id) => request("/discover/click", { method: "POST", body: { section, type, id } }),
 
+  // --- Phase 3.0: Recommendation Engine ---
+  forYou: (limit, context) => request("/recommendations/for-you" + "?limit=" + (limit || 20) + (context ? "&context=" + context : "")),
+  recFeedback: (trackId, action) => request("/recommendations/feedback", { method: "POST", body: { trackId, action } }),
+
   // --- Phase 8: Notifications ---
   notifications: (limit) => request("/notifications" + (limit ? "?limit=" + limit : "")),
 
@@ -212,8 +218,19 @@ export const api = {
   unreadNotificationCount: () => request("/notifications/unread-count"),
 
   // --- Phase 2.1: Social Interaction 2.0 ---
-  postDetail: (id) => request("/social/post/" + encodeURIComponent(id)),
-  reactPost: (id) => request("/social/post/" + encodeURIComponent(id) + "/react", { method: "POST", body: {} }),
+postDetail: (id) => request("/social/post/" + encodeURIComponent(id)),
+reactPost: (id) => request("/social/post/" + encodeURIComponent(id) + "/react", { method: "POST", body: {} }),
+
+// Artist posts (Phase 2.4)
+artistPosts: (username) => request("/artist-posts?username=" + encodeURIComponent(username)),
+myArtistPosts: () => request("/artist-posts/mine"),
+createArtistPost: (payload) => request("/artist-posts", { method: "POST", body: payload }),
+artistPostDetail: (id) => request("/artist-posts/" + encodeURIComponent(id)),
+updateArtistPost: (id, payload) => request("/artist-posts/" + encodeURIComponent(id), { method: "PATCH", body: payload }),
+deleteArtistPost: (id) => request("/artist-posts/" + encodeURIComponent(id), { method: "DELETE" }),
+reactArtistPost: (id) => request("/artist-posts/" + encodeURIComponent(id) + "/react", { method: "POST", body: {} }),
+viewArtistPost: (id) => request("/artist-posts/" + encodeURIComponent(id) + "/view", { method: "POST", body: {} }),
+pinArtistPost: (id) => request("/artist-posts/" + encodeURIComponent(id) + "/pin", { method: "POST", body: {} }),
 
   listComments: (targetType, targetId, { limit = 25, before } = {}) =>
     request("/comments?targetType=" + encodeURIComponent(targetType) + "&targetId=" + encodeURIComponent(targetId)
