@@ -26,6 +26,7 @@ import aiRoutes from "./routes/ai.js";
 import assistantRoutes from "./routes/assistant.js";
 import eventsRoutes from "./routes/events.js";
 import { usingDefaultSecret } from "./auth.js";
+import { securityHeaders } from "./middleware/security-headers.js";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -52,9 +53,15 @@ app.use(cors({
   },
 }));
 app.use(express.json({ limit: "1mb" }));
+app.use(securityHeaders);
 
 app.get("/api/health", (req, res) => {
-  res.json({ ok: true, service: "song-backend", time: new Date().toISOString() });
+  res.json({
+    ok: true,
+    service: "song-backend",
+    env: process.env.NODE_ENV || "development",
+    time: new Date().toISOString(),
+  });
 });
 
 app.use("/api/auth", authRoutes);
@@ -115,6 +122,6 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Server đang chạy ở http://localhost:${PORT}`);
+  console.log(`[4ang] Server listening on port ${PORT} (${process.env.NODE_ENV || "development"})`);
   startRoomHousekeeping();
 });

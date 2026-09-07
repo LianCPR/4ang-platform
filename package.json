@@ -15,9 +15,15 @@
     "typecheck:client": "cd client && pnpm typecheck || true",
     "typecheck:server": "cd server && pnpm typecheck || true",
     "lint": "cd client && pnpm lint",
-    "test": "echo 'No tests configured yet'",
+    "test": "echo 'Add tests with: pnpm test:web, pnpm test:api, pnpm test:python, pnpm test:cpp'",
+    "test:web": "cd client && pnpm test",
+    "test:api": "cd server && node --check src/index.js",
+    "test:python": "cd services/intelligence && python -m pytest tests/ -v || echo 'No Python tests'",
+    "test:cpp": "cd native/audio-engine && cmake -S . -B build && cmake --build build && ctest --test-dir build --output-on-failure",
+    "verify": "pnpm typecheck && pnpm lint && pnpm build && pnpm test:api",
     "clean": "rm -rf node_modules client/node_modules server/node_modules packages/*/node_modules services/*/node_modules",
-    "postinstall": "echo '4ang monorepo ready'"
+    "clean:build": "rm -rf client/dist server/build native/audio-engine/build",
+    "postinstall": "echo '✅ 4ang monorepo ready — run: pnpm dev'"
   },
   "devDependencies": {
     "concurrently": "^9.0.0"

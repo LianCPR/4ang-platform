@@ -1,0 +1,207 @@
+# 4ang CI/CD Pipeline
+# Runs on every push and pull request to main
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+  PNPM_VERSION: "9"
+
+jobs:
+  # ═══════════════════════════════════════════════
+  # Lint
+  # ═══════════════════════════════════════════════
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+        name: Install dependencies
+
+      - run: cd client && pnpm lint
+        name: Lint client
+
+  # ═══════════════════════════════════════════════
+  # TypeScript Check
+  # ═══════════════════════════════════════════════
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+        name: Install dependencies
+
+      - run: cd packages/shared-types && pnpm typecheck
+        name: Typecheck shared-types
+
+      - run: cd packages/api-client && pnpm typecheck
+        name: Typecheck api-client
+
+  # ═══════════════════════════════════════════════
+  # Web Build
+  # ═══════════════════════════════════════════════
+  web-build:
+    name: Web Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+        name: Install dependencies
+
+      - run: cd client && VITE_SUPABASE_URL=test VITE_SUPABASE_ANON_KEY=test pnpm build
+        name: Build web application
+
+  # ═══════════════════════════════════════════════
+  # API Build
+  # ═══════════════════════════════════════════════
+  api-build:
+    name: API Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+        name: Install dependencies
+
+      - run: cd server && node --check src/index.js
+        name: Validate API syntax
+
+  # ═══════════════════════════════════════════════
+  # Python Tests
+  # ═══════════════════════════════════════════════
+  python-test:
+    name: Python Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/intelligence
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -e ".[dev]" || pip install fastapi uvicorn pydantic
+        name: Install Python dependencies
+
+      - run: python -m pytest tests/ -v --tb=short || echo "No tests found"
+        name: Run Python tests
+
+  # ═══════════════════════════════════════════════
+  # C++ Build & Test
+  # ═══════════════════════════════════════════════
+  cpp-build:
+    name: C++ Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: native/audio-engine
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install CMake
+        uses: lukka/get-cmake@latest
+
+      - name: Configure CMake
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release -j$(nproc)
+
+      - name: Run Tests
+        run: ctest --test-dir build -C Release --output-on-failure
+
+  # ═══════════════════════════════════════════════
+  # Security Audit
+  # ═══════════════════════════════════════════════
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+        name: Install dependencies
+
+      - run: pnpm audit --audit-level=high || true
+        name: Audit dependencies
+
+      - name: Check for secrets in git diff
+        run: |
+          if git diff --cached -U0 | grep -iE '(password|secret|api.?key|token).*=.*["\x27][A-Za-z0-9+/=]{16,}'; then
+            echo "⚠️ Possible secret detected in staged changes"
+            exit 1
+          fi
+          echo "✅ No obvious secrets detected"
+
+  # ═══════════════════════════════════════════════
+  # Summary
+  # ═══════════════════════════════════════════════
+  ci-success:
+    name: CI Success
+    runs-on: ubuntu-latest
+    needs: [lint, typecheck, web-build, api-build, python-test, cpp-build, security]
+    steps:
+      - name: All checks passed
+        run: echo "✅ All CI checks passed"

@@ -15,6 +15,7 @@ server/.env.*.local
 dist/
 build/
 .next/
+*.tsbuildinfo
 
 # Database
 *.sqlite
@@ -39,8 +40,20 @@ Thumbs.db
 *.log
 npm-debug.log*
 
+# C++ build artifacts
+native/audio-engine/build/
+
+# Python
+services/intelligence/__pycache__/
+services/intelligence/.venv/
+services/intelligence/*.egg-info/
+
 # Supabase
 supabase/.temp/
 
 # Freebuff
 .freebuff/
+
+# pnpm
+pnpm-debug.log*
+.pnpm-store/

@@ -29,11 +29,11 @@ services:
 
       # CORS — update with your frontend domain(s)
       - key: CORS_ORIGINS
-        value: https://4ang.heiennek286.workers.dev,https://4ang.vercel.app,http://localhost:5173
+        value: https://4ang.xyz,https://fourang.heiennek286.workers.dev,http://localhost:5173
 
       # App URL (for auth redirects)
       - key: APP_URL
-        value: https://4ang.vercel.app
+        value: https://4ang.xyz
 
       # Supabase (optional — leave blank to use SQLite only)
       - key: SUPABASE_URL
