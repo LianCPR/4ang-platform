@@ -15,3 +15,4 @@ export * from "./intelligence";
 export * from "./assistant";
 export * from "./api";
 export * from "./audio";
+export * from "./identity";
