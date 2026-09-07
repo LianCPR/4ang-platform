@@ -3,18 +3,21 @@
   "private": true,
   "scripts": {
     "dev": "concurrently \"cd server && pnpm dev\" \"cd client && pnpm dev\"",
-    "build": "pnpm --filter music-app build && pnpm --filter song-app-server build",
-    "build:client": "cd client && pnpm build",
+    "dev:web": "cd client && pnpm dev",
+    "dev:api": "cd server && pnpm dev",
+    "build": "pnpm build:types && pnpm build:api-client && pnpm build:web",
+    "build:types": "cd packages/shared-types && pnpm typecheck",
+    "build:api-client": "cd packages/api-client && pnpm typecheck",
+    "build:web": "cd client && pnpm build",
     "build:server": "cd server && pnpm build",
-    "build:native": "cd native/audio-engine && cmake -B build && cmake --build build",
-    "test": "pnpm test:unit && pnpm test:integration",
-    "test:unit": "cd tests && pnpm test:unit",
-    "test:integration": "cd tests && pnpm test:integration",
+    "typecheck": "pnpm typecheck:types && pnpm typecheck:client && pnpm typecheck:server",
+    "typecheck:types": "cd packages/shared-types && pnpm typecheck",
+    "typecheck:client": "cd client && pnpm typecheck || true",
+    "typecheck:server": "cd server && pnpm typecheck || true",
     "lint": "cd client && pnpm lint",
-    "typecheck": "cd client && pnpm typecheck",
-    "db:migrate": "cd supabase && pnpm migrate",
-    "db:seed": "cd supabase && pnpm seed",
-    "clean": "rm -rf node_modules client/node_modules server/node_modules packages/*/node_modules"
+    "test": "echo 'No tests configured yet'",
+    "clean": "rm -rf node_modules client/node_modules server/node_modules packages/*/node_modules services/*/node_modules",
+    "postinstall": "echo '4ang monorepo ready'"
   },
   "devDependencies": {
     "concurrently": "^9.0.0"

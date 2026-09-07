@@ -3,15 +3,25 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "main": "./index.ts",
-  "types": "./index.ts",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
   "exports": {
-    ".": "./index.ts",
-    "./track": "./track.ts",
-    "./artist": "./artist.ts",
-    "./playlist": "./playlist.ts",
-    "./user": "./user.ts",
-    "./social": "./social.ts",
-    "./api": "./api.ts"
+    ".": "./src/index.ts",
+    "./track": "./src/track.ts",
+    "./artist": "./src/artist.ts",
+    "./album": "./src/album.ts",
+    "./playlist": "./src/playlist.ts",
+    "./user": "./src/user.ts",
+    "./social": "./src/social.ts",
+    "./room": "./src/room.ts",
+    "./player": "./src/player.ts",
+    "./search": "./src/search.ts",
+    "./recommendation": "./src/recommendation.ts",
+    "./intelligence": "./src/intelligence.ts",
+    "./assistant": "./src/assistant.ts",
+    "./api": "./src/api.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
   }
 }

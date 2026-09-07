@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": false,
+    "noImplicitAny": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@4ang/shared-types": ["../packages/shared-types/src"],
+      "@4ang/shared-types/*": ["../packages/shared-types/src/*"]
+    }
+  },
+  "include": [
+    "src/**/*",
+    "../packages/shared-types/src/**/*"
+  ],
+  "exclude": ["node_modules", "dist"]
+}
