@@ -4,10 +4,12 @@ import {
   ArrowLeft, Disc3, TrendingUp, Users, Music, Eye, Plus, Search, Filter, Clock,
   CheckCircle, XCircle, AlertCircle, MoreHorizontal, Play, Edit3, Trash2, Send,
   BarChart3, FileText, Heart, Bookmark, Activity, Calendar, LayoutDashboard,
-  Upload, Settings, ExternalLink, Mic2, Headphones, Home, ShieldCheck
+  Upload, Settings, ExternalLink, Mic2, Headphones, Home, ShieldCheck,
+  MessageCircle, PenLine, Pin, ListMusic, Sparkles
 } from "lucide-react";
 import { api } from "../api";
 import { gradientFor, hashHue, formatTime, timeAgo } from "../lib/format";
+import ArtistAiTools from "../components/ArtistAiTools";
 
 const STATUS_LABELS = {
   draft: { label: "Bản nháp", icon: FileText, color: "var(--text-muted)" },
@@ -21,8 +23,10 @@ const STATUS_LABELS = {
 const NAV_ITEMS = [
   { id: "overview", label: "Tổng quan", icon: LayoutDashboard },
   { id: "my-music", label: "Nhạc của tôi", icon: Music },
+  { id: "social", label: "Bài đăng", icon: MessageCircle },
   { id: "analytics", label: "Phân tích", icon: BarChart3 },
   { id: "profile", label: "Hồ sơ nghệ sĩ", icon: Mic2 },
+  { id: "ai-tools", label: "Công cụ AI", icon: Sparkles },
 ];
 
 /* ─── Stat card ──────────────────────────── */
@@ -130,8 +134,171 @@ function ReleaseRow({ release, onAction }) {
   );
 }
 
+/* ─── Artist Social Manager (Phase 2.4) ──── */
+const POST_ATTACH_OPTIONS = [
+  { id: null, label: "Văn bản", icon: PenLine },
+  { id: "track", label: "Bài hát", icon: Music },
+  { id: "release", label: "Phát hành", icon: Disc3 },
+  { id: "playlist", label: "Playlist", icon: ListMusic },
+];
+
+function SocialManager({ showToast, onOpenPost }) {
+  const [posts, setPosts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [attachType, setAttachType] = useState(null);
+  const [attachId, setAttachId] = useState("");
+  const [body, setBody] = useState("");
+  const [publishing, setPublishing] = useState(false);
+  const [tracks, setTracks] = useState([]);
+  const [releases, setReleases] = useState([]);
+  const [playlists, setPlaylists] = useState([]);
+
+  useEffect(() => { load(); }, []);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const [postsRes, tracksRes, playlistsRes, releasesRes] = await Promise.all([
+        api.myArtistPosts().catch(() => ({ posts: [] })),
+        api.myTracks().catch(() => ({ tracks: [] })),
+        api.myPlaylists().catch(() => ({ playlists: [] })),
+        api.myReleases().catch(() => ({ releases: [] })),
+      ]);
+      setPosts(postsRes.posts || []);
+      setTracks((tracksRes.tracks || []).filter((t) => t.status === "approved"));
+      setPlaylists(playlistsRes.playlists || []);
+      setReleases((releasesRes.releases || []).filter((r) => r.status === "published"));
+    } catch { /* ignore */ }
+    setLoading(false);
+  }
+
+  async function publish() {
+    if (publishing) return;
+    if (attachType && !attachId) { showToast("Chọn tác phẩm để đăng."); return; }
+    if (!attachType && !body.trim()) { showToast("Nhập nội dung bài đăng."); return; }
+    setPublishing(true);
+    try {
+      const res = await api.createArtistPost({
+        postType: "post",
+        body,
+        musicType: attachType,
+        musicId: attachId || null,
+      });
+      if (res.post) setPosts((prev) => [res.post, ...prev]);
+      setBody("");
+      setAttachType(null);
+      setAttachId("");
+      showToast("Đã đăng bài.");
+    } catch (e) {
+      showToast(e.message || "Không thể đăng bài.");
+    }
+    setPublishing(false);
+  }
+
+  async function pin(id) {
+    try {
+      await api.pinArtistPost(id);
+      setPosts((prev) => prev.map((p) => ({ ...p, isFeatured: p.id === id ? !p.isFeatured : p.isFeatured })));
+    } catch (e) { showToast(e.message || "Không thể ghim/đổi ghim."); }
+  }
+
+  async function remove(id) {
+    if (!confirm("Xoá bài đăng này?")) return;
+    try {
+      await api.deleteArtistPost(id);
+      setPosts((prev) => prev.filter((p) => p.id !== id));
+      showToast("Đã xoá bài đăng.");
+    } catch (e) { showToast(e.message || "Không thể xoá."); }
+  }
+
+  const sorted = [...posts].sort((a, b) => (b.isFeatured ? 1 : 0) - (a.isFeatured ? 1 : 0) || (b.createdAt || 0) - (a.createdAt || 0));
+  const attachOptions = attachType === "track" ? tracks
+    : attachType === "release" ? releases
+    : attachType === "playlist" ? playlists
+    : [];
+
+  return (
+    <div className="dash-social">
+      <div className="dash-section-card">
+        <div className="dash-section-card-title"><PenLine size={15} /> Tạo bài đăng mới</div>
+        <div className="ds-attach-tabs">
+          {POST_ATTACH_OPTIONS.map(({ id, label, icon: I }) => (
+            <button key={id || "none"} type="button"
+              className={"ds-attach-tab" + (attachType === id ? " active" : "")}
+              onClick={() => { setAttachType(id); setAttachId(""); }}>
+              <I size={14} /> {label}
+            </button>
+          ))}
+        </div>
+        <textarea
+          className="ds-composer"
+          rows={3}
+          maxLength={500}
+          placeholder="Chia sẻ với người hâm mộ của bạn..."
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+        />
+        <div className="ds-composer-row">
+          {attachType ? (
+            <select className="ds-composer-select" value={attachId} onChange={(e) => setAttachId(e.target.value)}>
+              <option value="">Chọn tác phẩm...</option>
+              {attachOptions.map((o) => (
+                <option key={o.id} value={o.id}>{o.title}</option>
+              ))}
+            </select>
+          ) : <span />}
+          <span className="ds-char-count">{body.length}/500</span>
+          <button type="button" className="dash-btn-primary" onClick={publish} disabled={publishing}>
+            <Send size={14} /> {publishing ? "Đang đăng..." : "Đăng"}
+          </button>
+        </div>
+      </div>
+
+      <div className="dash-section-card">
+        <div className="dash-section-card-title"><MessageCircle size={15} /> Bài đăng của bạn ({posts.length})</div>
+        {loading ? (
+          <div className="dash-muted">Đang tải...</div>
+        ) : sorted.length === 0 ? (
+          <div className="dash-muted">Chưa có bài đăng nào. Tạo bài đăng đầu tiên nhé!</div>
+        ) : (
+          <div className="ds-post-list">
+            {sorted.map((p) => {
+              const t = p.target;
+              return (
+                <div key={p.id} className="ds-post-item">
+                  <div className="ds-post-head">
+                    <span className="ds-post-status">{p.status === "published" ? "Đã đăng" : "Ẩn"}</span>
+                    {p.isFeatured && <span className="ds-post-pin"><Pin size={12} /> Ghim</span>}
+                    <span className="ds-post-time">{timeAgo(p.createdAt)}</span>
+                  </div>
+                  {p.message && <p className="ds-post-message">{p.message}</p>}
+                  {t && (
+                    <div className="ds-post-target">
+                      <div className="ds-post-target-art" style={t.coverUrl ? { backgroundImage: `url('${t.coverUrl}')` } : { background: gradientFor(hashHue(t.title)) }} />
+                      <div className="ds-post-target-title">{t.title}</div>
+                    </div>
+                  )}
+                  <div className="ds-post-actions">
+                    <span className="ds-post-counts">
+                      <Heart size={12} /> {p.likeCount || 0}
+                      <MessageCircle size={12} /> {p.commentCount || 0}
+                    </span>
+                    <button type="button" className="ds-post-btn" onClick={() => onOpenPost && onOpenPost(p.id, "artist_post")}>Xem</button>
+                    <button type="button" className="ds-post-btn" onClick={() => pin(p.id)}>{p.isFeatured ? "Bỏ ghim" : "Ghim"}</button>
+                    <button type="button" className="ds-post-btn danger" onClick={() => remove(p.id)}>Xoá</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ══════════════════════════════════════════ */
-export default function ArtistDashboardPage({ session, showToast, onClose, onOpenSubmitMusic, onOpenArtist }) {
+export default function ArtistDashboardPage({ session, showToast, onClose, onOpenSubmitMusic, onOpenArtist, onOpenPost }) {
   const [view, setView] = useState("overview");
   const [stats, setStats] = useState(null);
   const [releases, setReleases] = useState([]);
@@ -308,7 +475,10 @@ export default function ArtistDashboardPage({ session, showToast, onClose, onOpe
             <h1 className="dash-header-title">
               {view === "overview" && "Tổng quan"}
               {view === "my-music" && "Nhạc của tôi"}
+              {view === "social" && "Bài đăng"}
               {view === "analytics" && "Phân tích"}
+              {view === "profile" && "Hồ sơ nghệ sĩ"}
+              {view === "ai-tools" && "Công cụ AI"}
             </h1>
             <span className="dash-header-sub">{greeting}, {session?.displayName || session?.username}</span>
           </div>
@@ -586,6 +756,13 @@ export default function ArtistDashboardPage({ session, showToast, onClose, onOpe
               </motion.div>
             )}
 
+            {/* ════════════════ SOCIAL (Phase 2.4) ════════════════ */}
+            {view === "social" && (
+              <motion.div key="social" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
+                <SocialManager showToast={showToast} onOpenPost={onOpenPost} />
+              </motion.div>
+            )}
+
             {/* ════════════════ ARTIST PROFILE ════════════════ */}
             {view === "profile" && (
               <motion.div key="profile" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
@@ -637,6 +814,12 @@ export default function ArtistDashboardPage({ session, showToast, onClose, onOpe
                     </div>
                   </div>
                 )}
+              </motion.div>
+            )}
+
+            {view === "ai-tools" && (
+              <motion.div key="ai-tools" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
+                <ArtistAiTools artistProfile={profileData} />
               </motion.div>
             )}
           </AnimatePresence>

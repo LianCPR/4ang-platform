@@ -404,4 +404,18 @@ pinArtistPost: (id) => request("/artist-posts/" + encodeURIComponent(id) + "/pin
     invite: (id, username) => request("/rooms/" + encodeURIComponent(id) + "/invite", { method: "POST", body: { username } }),
     invites: () => request("/rooms/invites/list"),
   },
+
+  // ═══ AI (Phase 3.2) ═══
+  ai: {
+    status: () => request("/ai/status"),
+    analyzeTrack: (track) => request("/ai/analyze-track", { method: "POST", body: { track } }),
+    parseIntent: (query) => request("/ai/parse-intent", { method: "POST", body: { query } }),
+    searchEnhance: (query) => request("/ai/search-enhance", { method: "POST", body: { query } }),
+    explain: (track, reasons, userTaste) => request("/ai/explain", { method: "POST", body: { track, reasons, userTaste } }),
+    playlistPlan: (query) => request("/ai/playlist-plan", { method: "POST", body: { query } }),
+    artistBio: (artistName, genre, existingBio) => request("/ai/artist/bio", { method: "POST", body: { artistName, genre, existingBio } }),
+    releaseDesc: (title, artistName, type, genre) => request("/ai/artist/release-desc", { method: "POST", body: { title, artistName, type, genre } }),
+    trackMeta: (title, artistName, genre) => request("/ai/artist/track-meta", { method: "POST", body: { title, artistName, genre } }),
+    announcement: (title, artistName, type) => request("/ai/artist/announcement", { method: "POST", body: { title, artistName, type } }),
+  },
 };

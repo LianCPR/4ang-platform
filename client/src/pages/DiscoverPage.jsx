@@ -6,6 +6,7 @@ import { Butterfly, Flower, Vine, RoseCluster, Petal } from "../assets/Botanical
 import { gradientFor, hashHue, formatTime } from "../lib/format";
 import ErrorState from "../components/ErrorState";
 import SocialDiscovery from "../components/discovery/SocialDiscovery";
+import AiDiscovery from "../components/AiDiscovery";
 
 /* ─── Fade-in section ─────────────────────────── */
 function Section({ children, delay = 0, className = "" }) {
@@ -361,6 +362,13 @@ export default function DiscoverPage({
               </div>
             ))}
           </div>
+        </Section>
+      )}
+
+      {/* ── AI DISCOVERY ── */}
+      {session && (
+        <Section delay={0.07} className="disc-section">
+          <AiDiscovery onPlay={playFrom} />
         </Section>
       )}
 
