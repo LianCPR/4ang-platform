@@ -11,6 +11,7 @@ function FeedItem({ activity, onOpenPost, onPlay, onOpenArtist, session, onFollo
   const config = ACTIVITY_CONFIG[activity.eventType] || { icon: Music, color: "var(--text-muted)", verb: "đã tương tác" };
   const Icon = config.icon;
   const target = activity.target;
+  const openPost = () => onOpenPost && onOpenPost(activity.artistPostId || activity.id, activity.artistPostId ? "artist_post" : "post");
 
   return (
     <motion.div
@@ -20,7 +21,7 @@ function FeedItem({ activity, onOpenPost, onPlay, onOpenArtist, session, onFollo
       transition={{ duration: 0.25 }}
     >
       {/* Header — click opens post detail */}
-      <div className="feed-item-header" onClick={() => onOpenPost && onOpenPost(activity.id)}>
+      <div className="feed-item-header" onClick={openPost}>
         <div className="feed-avatar" style={activity.avatarUrl
           ? { backgroundImage: `url('${activity.avatarUrl}')` }
           : { background: gradientFor(hashHue(activity.username)) }
@@ -38,12 +39,12 @@ function FeedItem({ activity, onOpenPost, onPlay, onOpenArtist, session, onFollo
 
       {/* Message */}
       {activity.message && (
-        <p className="feed-message" onClick={() => onOpenPost && onOpenPost(activity.id)}>{activity.message}</p>
+        <p className="feed-message" onClick={openPost}>{activity.message}</p>
       )}
 
       {/* Target content */}
       {target && target.type === "track" && (
-        <div className="feed-track-card" onClick={() => onOpenPost && onOpenPost(activity.id)}>
+        <div className="feed-track-card" onClick={openPost}>
           <div className="feed-track-art" style={target.coverUrl
             ? { backgroundImage: `url('${target.coverUrl}')` }
             : { background: gradientFor(hashHue(target.title)) }
@@ -60,7 +61,7 @@ function FeedItem({ activity, onOpenPost, onPlay, onOpenArtist, session, onFollo
       )}
 
       {target && target.type === "playlist" && (
-        <div className="feed-track-card" onClick={() => onOpenPost && onOpenPost(activity.id)}>
+        <div className="feed-track-card" onClick={openPost}>
           <div className="feed-track-art" style={target.coverUrl
             ? { backgroundImage: `url('${target.coverUrl}')` }
             : { background: gradientFor(hashHue(target.title)) }
@@ -72,6 +73,23 @@ function FeedItem({ activity, onOpenPost, onPlay, onOpenArtist, session, onFollo
           <div className="feed-track-info">
             <div className="feed-track-title">{target.title}</div>
             <div className="feed-track-artist">{target.trackCount} bài hát</div>
+          </div>
+        </div>
+      )}
+
+      {target && target.type === "release" && (
+        <div className="feed-track-card" onClick={openPost}>
+          <div className="feed-track-art" style={target.coverUrl
+            ? { backgroundImage: `url('${target.coverUrl}')` }
+            : { background: gradientFor(hashHue(target.title)) }
+          }>
+            <div className="feed-track-play">
+              <Music size={16} />
+            </div>
+          </div>
+          <div className="feed-track-info">
+            <div className="feed-track-title">{target.title}</div>
+            <div className="feed-track-artist">{(target.releaseType || "Phát hành")}{target.trackCount ? ` • ${target.trackCount} bài` : ""}</div>
           </div>
         </div>
       )}
@@ -120,7 +138,7 @@ function FeedItem({ activity, onOpenPost, onPlay, onOpenArtist, session, onFollo
           <Heart size={16} fill={activity.reacted ? "currentColor" : "none"} />
           <span>Tym</span>
         </button>
-        <button type="button" className="feed-action-btn" onClick={() => onOpenPost && onOpenPost(activity.id)}>
+        <button type="button" className="feed-action-btn" onClick={openPost}>
           <MessageCircle size={16} />
           <span>{formatCount(activity.commentCount || 0)}</span>
         </button>
@@ -175,7 +193,9 @@ export default function SocialFeedPage({ session, onPlay, current, isPlaying, on
       ? { ...a, reacted: !was, likeCount: (a.likeCount || 0) + (was ? -1 : 1) }
       : a));
     try {
-      const res = await api.reactPost(activity.id);
+      const res = activity.artistPostId
+        ? await api.reactArtistPost(activity.artistPostId)
+        : await api.reactPost(activity.id);
       setActivities((prev) => prev.map((a) => a.id === activity.id
         ? { ...a, reacted: res.reacted, likeCount: res.likeCount }
         : a));

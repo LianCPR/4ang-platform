@@ -173,7 +173,7 @@ function PeopleCard({ person, following, onFollow, onDismiss, match }) {
 /* ─── Main component ────────────────────────────────── */
 
 export default function SocialDiscovery({
-  session, current, isPlaying, onPlay, onOpenArtist, onOpenRoom, onOpenPlaylist, showToast,
+  session, current, isPlaying, onPlay, onOpenArtist, onOpenRoom, onOpenPlaylist, showToast, onOpenPost,
 }) {
   const [payload, setPayload] = useState(null); // { hasSocialData, sections }
   const [loading, setLoading] = useState(true);
@@ -238,6 +238,37 @@ export default function SocialDiscovery({
             onPlay={(list, i) => playClicked("friends-listening", list, i)}
             onOpenArtist={onOpenArtist}
           />
+        </div>
+      )}
+
+      {S.artistUpdates?.length > 0 && (
+        <div className="disc-section disco-section">
+          <SectionHead title="TỪ NGHỆ SĨ BẠN THEO DÕI" sub="Bài đăng và thông báo phát hành mới" />
+          <div className="disc-post-list">
+            {S.artistUpdates.map((p) => {
+              const t = p.target;
+              return (
+                <div key={p.id} className="disc-post-item" onClick={() => onOpenPost?.(p.id, "artist_post")}>
+                  <div className="disc-post-head">
+                    <span className="disc-post-name">{p.displayName}</span>
+                    {p.isFeatured && <span className="disc-post-featured">★ Ghim</span>}
+                    <span className="disc-post-time">{timeAgo(p.createdAt)}</span>
+                  </div>
+                  {p.message && <p className="disc-post-message">{p.message}</p>}
+                  {t && (
+                    <div className="disc-post-target">
+                      <div className="disc-post-art" style={t.coverUrl ? { backgroundImage: `url('${t.coverUrl}')` } : { background: gradientFor(hashHue(t.title)) }} />
+                      <div className="disc-post-info">
+                        <div className="disc-post-title">{t.title}</div>
+                        <div className="disc-post-sub">{t.type === "track" ? t.artist : t.type === "release" ? (t.releaseType || "Phát hành") + (t.trackCount ? ` • ${t.trackCount} bài` : "") : `${t.trackCount || 0} bài hát`}</div>
+                      </div>
+                    </div>
+                  )}
+                  <Why reasons={p.reason} />
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 

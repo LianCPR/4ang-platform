@@ -9,6 +9,7 @@ import { rateLimit } from "../rateLimit.js";
 import { GENRES } from "./artists.js";
 import { supabaseAdmin } from "../supabase.js";
 import { uploadFile, deleteFile } from "../storage.js";
+import { ensureReleaseAnnouncementForRelease } from "./artist-posts.js";
 
 const router = express.Router();
 router.use(requireAuth, requireAdmin);
@@ -287,6 +288,8 @@ router.post("/releases/:id/approve", adminActionLimit, async (req, res) => {
   const now = new Date().toISOString();
   await supabaseAdmin.from("releases").update({ status: "published", reviewed_at: now, reviewed_by: req.user.id, updated_at: now }).eq("id", req.params.id);
   await recordAdminAudit(req.user.username, "release_approved", "release", req.params.id, { title: row.title });
+  // Phase 2.4: auto-publish an artist release announcement (idempotent).
+  await ensureReleaseAnnouncementForRelease(row);
   const { data: updated } = await supabaseAdmin.from("releases").select("*").eq("id", req.params.id).single();
   res.json({ release: await shapeRelease(updated) });
 });

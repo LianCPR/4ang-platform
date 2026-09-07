@@ -271,3 +271,129 @@
   .comment-reply-composer { margin-left: 28px; }
   .feed-action-btn { flex: 1; justify-content: center; }
 }
+/* ------------------- Artist Social 2.0 (Phase 2.4) ------------------- */
+/* Artist profile */
+.ap-pinned-release {
+  display: flex; align-items: center; gap: 14px;
+  margin: 0 var(--sp-5) var(--sp-4);
+  padding: 12px 14px;
+  border: 1px solid var(--c-beige);
+  border-radius: 14px;
+  background: linear-gradient(120deg, rgba(111,128,102,0.10), rgba(111,128,102,0.02));
+}
+.ap-pinned-art {
+  width: 52px; height: 52px; border-radius: 8px; flex-shrink: 0;
+  background-size: cover; background-position: center;
+}
+.ap-pinned-info { flex: 1; min-width: 0; }
+.ap-pinned-label { font-size: var(--fs-xs); color: var(--c-gold); text-transform: uppercase; letter-spacing: 0.6px; }
+.ap-pinned-title { font-weight: 700; font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ap-pinned-sub { color: var(--c-muted); font-size: var(--fs-xs); }
+.ap-pinned-play { flex-shrink: 0; }
+.ap-post-list { display: flex; flex-direction: column; gap: var(--sp-3); }
+.ap-post-card {
+  border: 1px solid var(--c-beige);
+  border-radius: 12px;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.ap-post-card:hover { border-color: var(--c-sage); box-shadow: var(--shadow-sm); }
+.ap-post-head { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-2); }
+.ap-post-pin {
+  font-size: var(--fs-xs); color: var(--c-gold);
+  border: 1px solid var(--c-gold); border-radius: 999px; padding: 1px 8px;
+}
+.ap-post-time { margin-left: auto; color: var(--c-faint); font-size: var(--fs-xs); }
+.ap-post-message { font-size: var(--fs-sm); color: var(--text); line-height: 1.5; margin-bottom: var(--sp-3); }
+.ap-post-target { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2); border-radius: 10px; background: var(--surface-hover); }
+.ap-post-target-art {
+  width: 40px; height: 40px; border-radius: 8px; flex-shrink: 0;
+  background-size: cover; background-position: center;
+  display: flex; align-items: center; justify-content: center;
+}
+.ap-post-target-info { min-width: 0; }
+.ap-post-target-title { font-weight: 600; font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ap-post-target-sub { color: var(--c-muted); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ap-post-meta { display: flex; gap: var(--sp-4); margin-top: var(--sp-3); color: var(--c-faint); font-size: var(--fs-xs); }
+.ap-post-meta span { display: inline-flex; align-items: center; gap: 4px; }
+
+/* Dashboard composer + manager */
+.dash-social { display: flex; flex-direction: column; gap: var(--sp-4); }
+.dash-section-card {
+  border: 1px solid var(--c-beige);
+  border-radius: 16px;
+  padding: var(--sp-4);
+  background: var(--surface);
+}
+.dash-section-card-title {
+  display: flex; align-items: center; gap: 6px;
+  font-weight: 600; margin-bottom: var(--sp-3);
+}
+.ds-attach-tabs { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-bottom: var(--sp-3); }
+.ds-attach-tab {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--fs-sm); padding: 6px 12px;
+  border: 1px solid var(--c-beige); border-radius: 999px;
+  background: transparent; color: var(--c-muted); cursor: pointer;
+}
+.ds-attach-tab:hover { border-color: var(--c-sage); color: var(--text); }
+.ds-attach-tab.active { background: rgba(111,128,102,0.12); border-color: var(--c-sage-deep); color: var(--c-sage-deep); }
+.ds-composer {
+  width: 100%; resize: vertical; min-height: 82px;
+  border: 1px solid var(--c-beige); border-radius: 12px;
+  padding: var(--sp-3); background: var(--surface-hover);
+  color: var(--text); font-family: inherit; font-size: var(--fs-sm);
+}
+.ds-composer:focus { outline: none; border-color: var(--c-sage); }
+.ds-composer-row { display: flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-3); }
+.ds-composer-select {
+  flex: 1; max-width: 320px;
+  border: 1px solid var(--c-beige); border-radius: 8px;
+  padding: 8px 12px; background: var(--surface-hover); color: var(--text);
+  font-family: inherit; font-size: var(--fs-sm);
+}
+.ds-char-count { color: var(--c-faint); font-size: var(--fs-xs); margin-left: auto; }
+.ds-post-list { display: flex; flex-direction: column; gap: var(--sp-3); }
+.ds-post-item { border: 1px solid var(--c-beige); border-radius: 12px; padding: var(--sp-3); background: var(--surface-hover); }
+.ds-post-head { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-2); }
+.ds-post-status { font-size: var(--fs-xs); color: var(--c-sage-deep); font-weight: 600; }
+.ds-post-pin { font-size: var(--fs-xs); color: var(--c-gold); display: inline-flex; align-items: center; gap: 3px; }
+.ds-post-time { margin-left: auto; color: var(--c-faint); font-size: var(--fs-xs); }
+.ds-post-message { font-size: var(--fs-sm); color: var(--text); margin-bottom: var(--sp-2); line-height: 1.5; }
+.ds-post-target { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-2); }
+.ds-post-target-art { width: 32px; height: 32px; border-radius: 6px; background-size: cover; background-position: center; }
+.ds-post-target-title { font-size: var(--fs-sm); font-weight: 600; }
+.ds-post-actions { display: flex; align-items: center; gap: var(--sp-2); }
+.ds-post-counts { color: var(--c-faint); font-size: var(--fs-xs); display: inline-flex; align-items: center; gap: 5px; margin-right: auto; }
+.ds-post-btn {
+  font-size: var(--fs-xs); padding: 4px 10px;
+  border: 1px solid var(--c-beige); border-radius: 999px;
+  background: transparent; color: var(--c-muted); cursor: pointer;
+}
+.ds-post-btn:hover { border-color: var(--c-sage); color: var(--text); }
+.ds-post-btn.danger:hover { border-color: var(--danger); color: var(--danger); }
+.dash-muted { color: var(--c-faint); font-size: var(--fs-sm); padding: var(--sp-2) 0; }
+
+/* Discovery artist updates */
+.disc-post-list { display: flex; flex-direction: column; gap: var(--sp-3); }
+.disc-post-item {
+  border: 1px solid var(--c-beige); border-radius: 14px;
+  padding: var(--sp-4); background: var(--surface); cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.disc-post-item:hover { border-color: var(--c-sage); box-shadow: var(--shadow-sm); }
+.disc-post-head { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-2); }
+.disc-post-name { font-weight: 700; font-size: var(--fs-sm); }
+.disc-post-featured { font-size: var(--fs-xs); color: var(--c-gold); }
+.disc-post-time { margin-left: auto; color: var(--c-faint); font-size: var(--fs-xs); }
+.disc-post-message { font-size: var(--fs-sm); color: var(--text); margin-bottom: var(--sp-3); line-height: 1.5; }
+.disc-post-target {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-2); border-radius: 10px; background: var(--surface-hover);
+}
+.disc-post-art { width: 44px; height: 44px; border-radius: 8px; flex-shrink: 0; background-size: cover; background-position: center; }
+.disc-post-info { min-width: 0; }
+.disc-post-title { font-weight: 600; font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.disc-post-sub { color: var(--c-muted); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

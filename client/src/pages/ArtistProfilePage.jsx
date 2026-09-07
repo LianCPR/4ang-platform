@@ -1,10 +1,10 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronLeft, UserPlus, UserCheck, LayoutDashboard, Play, Pause, Clock, ExternalLink, Music, Share2, Shuffle, SkipForward, ListMusic, Heart, MoreHorizontal } from "lucide-react";
+import { ChevronLeft, UserPlus, UserCheck, LayoutDashboard, Play, Pause, Clock, ExternalLink, Music, Share2, Shuffle, SkipForward, ListMusic, Heart, MoreHorizontal, MessageCircle } from "lucide-react";
 import { api } from "../api";
 import ArtistBadge from "../components/ArtistBadge";
 import EmptyState from "../components/EmptyState";
-import { gradientFor, hashHue, initials, formatCount, formatTime } from "../lib/format";
+import { gradientFor, hashHue, initials, formatCount, formatTime, timeAgo } from "../lib/format";
 import { Flower, Butterfly, Vine } from "../assets/Botanical";
 
 const fadeUp = { hidden: { opacity: 0, y: 12 }, show: { opacity: 1, y: 0, transition: { duration: 0.4, ease: [0.16, 1, 0.3, 1] } } };
@@ -52,16 +52,50 @@ function ArtistTrackRow({ track: t, index: i, isCurrent, isPlaying, onPlay, onLi
   );
 }
 
-export default function ArtistProfilePage({ username, session, onBack, onOpenDashboard, onPlay, current, isPlaying, progress, onOpenArtist, onShareArtist, onLike, onSave, onPlayNext, onAddToQueue, onAddToPlaylist, ...railProps }) {
+/* ── Artist Post Card (Phase 2.4) ── */
+function ArtistPostCard({ post, onOpenPost }) {
+  const t = post.target;
+  return (
+    <div className="ap-post-card" onClick={() => onOpenPost && onOpenPost(post.id, "artist_post")}>
+      <div className="ap-post-head">
+        {post.isFeatured && <span className="ap-post-pin">Ghim</span>}
+        <span className="ap-post-time">{timeAgo(post.createdAt)}</span>
+      </div>
+      {post.message && <p className="ap-post-message">{post.message}</p>}
+      {t && (
+        <div className="ap-post-target">
+          <div className="ap-post-target-art" style={t.coverUrl ? { backgroundImage: `url('${t.coverUrl}')` } : { background: gradientFor(hashHue(t.title)) }}>
+            <Music size={14} style={{ color: "white" }} />
+          </div>
+          <div className="ap-post-target-info">
+            <div className="ap-post-target-title">{t.title}</div>
+            <div className="ap-post-target-sub">
+              {t.type === "track" ? t.artist : t.type === "release" ? (t.releaseType || "Phát hành") + (t.trackCount ? ` • ${t.trackCount} bài` : "") : `${t.trackCount || 0} bài hát`}
+            </div>
+          </div>
+        </div>
+      )}
+      <div className="ap-post-meta">
+        <span><Heart size={12} /> {formatCount(post.likeCount || 0)}</span>
+        <span><MessageCircle size={12} /> {formatCount(post.commentCount || 0)}</span>
+      </div>
+    </div>
+  );
+}
+
+export default function ArtistProfilePage({ username, session, onBack, onOpenDashboard, onPlay, current, isPlaying, progress, onOpenArtist, onShareArtist, onLike, onSave, onPlayNext, onAddToQueue, onAddToPlaylist, onOpenPost, ...railProps }) {
   const [artist, setArtist] = useState(null);
   const [error, setError] = useState("");
   const [followBusy, setFollowBusy] = useState(false);
+  const [posts, setPosts] = useState([]);
 
   useEffect(() => {
     let cancelled = false;
     setArtist(null);
     setError("");
+    setPosts([]);
     api.artistProfile(username).then((res) => { if (!cancelled) setArtist(res.artist); }).catch((err) => { if (!cancelled) setError(err.message); });
+    api.artistPosts(username).then((res) => { if (!cancelled) setPosts(res.posts || []); }).catch(() => { if (!cancelled) setPosts([]); });
     return () => { cancelled = true; };
   }, [username]);
 
@@ -205,6 +239,41 @@ export default function ArtistProfilePage({ username, session, onBack, onOpenDas
                 ))}
               </div>
             )}
+
+            {/* ── Pinned Release (Phase 2.4) ── */}
+            {artist.pinnedRelease && (
+              <div className="ap-pinned-release">
+                <div className="ap-pinned-art" style={artist.pinnedRelease.coverUrl ? { backgroundImage: `url('${artist.pinnedRelease.coverUrl}')` } : { background: gradientFor(hashHue(artist.pinnedRelease.title)) }} />
+                <div className="ap-pinned-info">
+                  <span className="ap-pinned-label">Phát hành được ghim</span>
+                  <div className="ap-pinned-title">{artist.pinnedRelease.title}</div>
+                  <div className="ap-pinned-sub">{(artist.pinnedRelease.type || "Phát hành").toUpperCase()}{artist.pinnedRelease.trackCount ? ` • ${artist.pinnedRelease.trackCount} bài` : ""}</div>
+                </div>
+                {artist.pinnedRelease.tracks && artist.pinnedRelease.tracks.length > 0 && (
+                  <button type="button" className="btn-primary ap-pinned-play" onClick={() => onPlay && onPlay(artist.pinnedRelease.tracks, 0)}>
+                    <Play size={15} fill="currentColor" /> Nghe
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* ── Artist Posts (Phase 2.4) ── */}
+            <div className="ap-section">
+              <div className="ap-section-header">
+                <h2 className="ap-section-title">Bài viết</h2>
+                <MessageCircle size={16} style={{ color: "var(--text-faint)" }} />
+              </div>
+              {posts.length === 0 ? (
+                <div className="ap-empty-tracks">
+                  <MessageCircle size={24} style={{ opacity: 0.2 }} />
+                  <p>Chưa có bài đăng nào.</p>
+                </div>
+              ) : (
+                <div className="ap-post-list">
+                  {posts.map((p) => <ArtistPostCard key={p.id} post={p} onOpenPost={onOpenPost} />)}
+                </div>
+              )}
+            </div>
 
             {/* ── Top Tracks ── */}
             <div className="ap-section">

@@ -21,6 +21,14 @@ router.get("/", optionalAuth, async (req, res) => {
   res.json({ releases, total: count || 0 });
 });
 
+router.get("/mine", requireAuth, async (req, res) => {
+  const { data: rows } = await supabaseAdmin
+    .from("releases").select("*").eq("created_by_username", req.user.username)
+    .order("created_at", { ascending: false });
+  if (!rows || rows.length === 0) return res.json({ releases: [] });
+  res.json({ releases: await Promise.all(rows.map((r) => shapeRelease(r))) });
+});
+
 router.get("/:id", optionalAuth, async (req, res) => {
   const { data: row } = await supabaseAdmin.from("releases").select("*").eq("id", req.params.id).single();
   if (!row) return res.status(404).json({ error: "Không tìm thấy phát hành." });
@@ -41,13 +49,11 @@ router.post("/", requireAuth, async (req, res) => {
   const now = new Date().toISOString();
   const { data: row, error } = await supabaseAdmin.from("releases").insert({
     title, type, description: (body.description || "").trim().slice(0, 2000),
-    artist_message: (body.artistMessage || "").trim().slice(0, 1000),
-    release_date: body.releaseDate?.trim() || null, label: body.label?.trim() || null,
-    copyright_text: body.copyrightText?.trim() || null,
+    release_date: body.releaseDate?.trim() || null,
     status: "draft", created_by: req.user.id, created_by_username: req.user.username,
     created_at: now, updated_at: now,
   }).select("*").single();
-  if (error) return res.status(500).json({ error: "Lỗi tạo phát hành." });
+  if (error) { console.error("[release create] " + (error.message || error)); return res.status(500).json({ error: "Lỗi tạo phát hành." }); }
   res.status(201).json({ release: await shapeRelease(row) });
 });
 
@@ -59,10 +65,7 @@ router.patch("/:id", requireAuth, async (req, res) => {
   const updates = { updated_at: new Date().toISOString() };
   if (body.title !== undefined) updates.title = String(body.title).trim();
   if (body.description !== undefined) updates.description = String(body.description).trim().slice(0, 2000);
-  if (body.artistMessage !== undefined) updates.artist_message = String(body.artistMessage).trim().slice(0, 1000);
   if (body.releaseDate !== undefined) updates.release_date = String(body.releaseDate).trim() || null;
-  if (body.label !== undefined) updates.label = String(body.label).trim() || null;
-  if (body.copyrightText !== undefined) updates.copyright_text = String(body.copyrightText).trim() || null;
   await supabaseAdmin.from("releases").update(updates).eq("id", row.id);
   const { data: updated } = await supabaseAdmin.from("releases").select("*").eq("id", row.id).single();
   res.json({ release: await shapeRelease(updated) });

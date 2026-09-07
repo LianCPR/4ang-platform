@@ -6,6 +6,7 @@ import { requireAuth } from "../auth.js";
 import { supabaseAdmin } from "../supabase.js";
 import { shapeTrack, recordActivity, createNotification, shapePublicUserSummary } from "../db.js";
 import { shouldNotify } from "../social-helpers.js";
+import { shapeArtistPosts } from "./artist-posts.js";
 
 const router = express.Router();
 
@@ -217,6 +218,16 @@ async function shapeFeedEvents(events, viewerUsername) {
     for (const r of (rooms || [])) roomMap[r.id] = r;
   }
 
+  // Batch-fetch artist posts if needed (Phase 2.4)
+  const artistPostIds = [...new Set(events.filter(e => e.target_type === "artist_post").map(e => e.target_id).filter(Boolean))];
+  const shapedArtistPostMap = {};
+  if (artistPostIds.length > 0) {
+    const { data: artistPosts } = await supabaseAdmin
+      .from("artist_posts").select("*").in("id", artistPostIds);
+    const shaped = await shapeArtistPosts(artistPosts || [], viewerUsername);
+    for (const sp of shaped) shapedArtistPostMap[sp.id] = sp;
+  }
+
   // Viewer's reactions on these events (posts)
   let reactedMap = {};
   if (viewerUsername && events.length > 0) {
@@ -232,11 +243,33 @@ async function shapeFeedEvents(events, viewerUsername) {
 
   return events.map(event => {
     const profile = profileMap[event.username] || {};
+    const targetType = event.target_type;
+    const targetId = event.target_id;
+
+    // Artist posts (Phase 2.4) resolve from the post itself.
+    const artistPost = targetType === "artist_post" ? shapedArtistPostMap[targetId] : null;
+    if (artistPost) {
+      if (artistPost.status !== "published") return null;
+      return {
+        id: event.id,
+        username: event.username,
+        displayName: artistPost.displayName,
+        avatarUrl: artistPost.avatarUrl,
+        eventType: event.event_type,
+        target: artistPost.target || null,
+        artistPostId: artistPost.id,
+        postType: artistPost.postType,
+        message: artistPost.message || null,
+        createdAt: event.created_at,
+        likeCount: artistPost.likeCount,
+        commentCount: artistPost.commentCount,
+        reacted: artistPost.reacted,
+      };
+    }
+
     const meta = typeof event.metadata === "string" ? (() => { try { return JSON.parse(event.metadata); } catch { return {}; } })() : (event.metadata || {});
 
     let target = null;
-    const targetType = event.target_type;
-    const targetId = event.target_id;
 
     if (targetType === "track" || targetType === "song") {
       const track = trackMap[targetId];
@@ -336,18 +369,21 @@ router.post("/share", requireAuth, async (req, res) => {
 async function shapePostById(event, viewerUsername) {
   if (!event) return null;
   const events = [event];
-  const shaped = await shapeFeedEvents(events);
+  const shaped = await shapeFeedEvents(events, viewerUsername);
   if (!shaped || shaped.length === 0) return null;
   const post = shaped[0];
 
-  // Reaction data for the viewer + counts
-  const { data: reactions } = await supabaseAdmin
-    .from("social_reactions")
-    .select("username")
-    .eq("target_type", "post")
-    .eq("target_id", event.id);
-  post.likeCount = (reactions || []).length;
-  post.reacted = !!viewerUsername && (reactions || []).some((r) => r.username === viewerUsername);
+  // For activity-event posts, recompute reaction counts for the viewer.
+  // Artist posts already carry accurate counts (artist_posts) — skip.
+  if (!post.artistPostId) {
+    const { data: reactions } = await supabaseAdmin
+      .from("social_reactions")
+      .select("username")
+      .eq("target_type", "post")
+      .eq("target_id", event.id);
+    post.likeCount = (reactions || []).length;
+    post.reacted = !!viewerUsername && (reactions || []).some((r) => r.username === viewerUsername);
+  }
 
   return post;
 }

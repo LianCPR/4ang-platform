@@ -19,6 +19,7 @@ import { supabaseAdmin } from "../supabase.js";
 import {
   shapeTrack, shapePlaylist, recordActivity,
 } from "../db.js";
+import { shapeArtistPosts } from "./artist-posts.js";
 
 const router = express.Router();
 const socialLimit = rateLimit({ windowMs: 60_000, max: 30, keyPrefix: "social-disc" });
@@ -511,6 +512,44 @@ async function peopleAndTaste(ctx) {
   return { people, taste };
 }
 
+// Artist updates — posts from artists you follow (Phase 2.4).
+async function artistUpdates(ctx) {
+  const artistUsernames = ctx.followedArtists.size > 0 ? [...ctx.followedArtists] : [];
+  let query = supabaseAdmin
+    .from("artist_posts").select("*")
+    .eq("status", "published")
+    .order("created_at", { ascending: false })
+    .limit(30);
+  if (artistUsernames.length > 0) query = query.in("artist_username", artistUsernames);
+  const { data: rows } = await query;
+  if (!rows || rows.length === 0) return [];
+
+  const posts = await shapeArtistPosts(rows, ctx.username);
+  if (posts.length === 0) return [];
+
+  const now = Date.now();
+  const ranked = posts.map((p) => {
+    let score = 0;
+    const reasons = [];
+    if (artistUsernames.includes(p.artistUsername)) { score += 10; reasons.push("Nghệ sĩ bạn theo dõi"); }
+    if (p.postType === "release_announcement") { score += 5; reasons.push("Phát hành mới"); }
+    else if (p.musicType) { score += 2; reasons.push("Có nhạc đính kèm"); }
+    const engagement = (p.likeCount || 0) + (p.commentCount || 0) + (p.viewCount || 0);
+    if (engagement > 0) {
+      score += Math.min(10, engagement * 3);
+      reasons.push(`${engagement} lượt tương tác`);
+    }
+    const ageMs = now - (p.createdAt || 0);
+    if (ageMs <= 24 * 3600 * 1000) { score += 5; reasons.push("Đăng gần đây"); }
+    return { ...p, score, reasons };
+  });
+
+  ranked.sort((a, b) => b.score - a.score);
+  return ranked
+    .slice(0, 8)
+    .map(({ score, reasons, ...rest }) => ({ ...rest, reason: reasons.slice(0, 2) }));
+}
+
 /* ─────────────────────────────────────────────────────────────────────
  * Routes
  * ───────────────────────────────────────────────────────────────────── */
@@ -522,7 +561,7 @@ router.get("/social", requireAuth, socialLimit, async (req, res) => {
     if (!ctx) return res.json({ hasSocialData: false, sections: {} });
 
     const hasNetwork = ctx.followingUsernames.length > 0 || ctx.followedArtists.size > 0;
-    const [friends, fromArtists, circle, shared, playlists, rooms, because, peopleAndTasteRes] = await Promise.all([
+    const [friends, fromArtists, circle, shared, playlists, rooms, because, posts, peopleAndTasteRes] = await Promise.all([
       friendsListening(ctx),
       fromArtistsYouFollow(ctx),
       trendingInCircle(ctx),
@@ -530,12 +569,14 @@ router.get("/social", requireAuth, socialLimit, async (req, res) => {
       playlistsFromNetwork(ctx),
       roomsFromNetwork(ctx),
       becauseYouLiked(ctx),
+      artistUpdates(ctx),
       peopleAndTaste(ctx),
     ]);
 
     const sections = {};
     if (hasNetwork && friends.length > 0) sections.friendsListening = friends;
     if (fromArtists.length > 0) sections.fromArtistsYouFollow = fromArtists;
+    if (posts.length > 0) sections.artistUpdates = posts;
     if (circle.length > 0) sections.trendingInCircle = circle;
     if (hasNetwork && shared.length > 0) sections.sharedWithYou = shared;
     if (hasNetwork && playlists.length > 0) sections.playlistsFromNetwork = playlists;

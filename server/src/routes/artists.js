@@ -3,7 +3,7 @@
  */
 import express from "express";
 import multer from "multer";
-import { shapeTrack, shapeArtistProfile, recordAdminAudit, createNotification, recordActivity } from "../db.js";
+import { shapeTrack, shapeRelease, shapeArtistProfile, recordAdminAudit, createNotification, recordActivity } from "../db.js";
 import { requireAuth, optionalAuth, requireAdmin } from "../auth.js";
 import { uploadFile, deleteFile, MAX_COVER_BYTES } from "../storage.js";
 import { supabaseAdmin } from "../supabase.js";
@@ -90,6 +90,14 @@ async function computeArtistStats(username) {
 }
 
 // Create artist profile
+async function pinnedReleaseFor(row) {
+  if (!row || !row.pinned_release_id) return null;
+  const { data: release } = await supabaseAdmin
+    .from("releases").select("*").eq("id", row.pinned_release_id).maybeSingle();
+  if (!release || release.status !== "published") return null;
+  return shapeRelease(release, { includeTracks: true });
+}
+
 router.post("/", requireAuth, async (req, res) => {
   const { data: existing } = await supabaseAdmin
     .from("artist_profiles").select("username").eq("username", req.user.username).maybeSingle();
@@ -123,7 +131,27 @@ router.get("/me", requireAuth, async (req, res) => {
     .from("artist_profiles").select("*").eq("username", req.user.username).single();
   if (!row) return res.status(404).json({ error: "Bạn chưa có hồ sơ nghệ sĩ." });
   const stats = await computeArtistStats(req.user.username);
-  res.json({ artist: shapeArtistProfile(row, stats) });
+  res.json({ artist: { ...shapeArtistProfile(row, stats), pinnedRelease: await pinnedReleaseFor(row) } });
+});
+
+// Pin / unpin a published release on the artist profile (Phase 2.4)
+router.post("/me/pinned-release", requireAuth, async (req, res) => {
+  const { data: row } = await supabaseAdmin
+    .from("artist_profiles").select("*").eq("username", req.user.username).single();
+  if (!row) return res.status(404).json({ error: "Bạn chưa có hồ sơ nghệ sĩ." });
+  const releaseId = String((req.body || {}).releaseId || "");
+  const now = new Date().toISOString();
+  if (!releaseId) {
+    await supabaseAdmin.from("artist_profiles").update({ pinned_release_id: null, updated_at: now }).eq("username", req.user.username);
+    return res.json({ ok: true, pinnedRelease: null });
+  }
+  const { data: release } = await supabaseAdmin
+    .from("releases").select("id, created_by_username, status").eq("id", releaseId).maybeSingle();
+  if (!release) return res.status(404).json({ error: "Không tìm thấy phát hành." });
+  if (release.created_by_username !== req.user.username) return res.status(403).json({ error: "Không có quyền." });
+  if (release.status !== "published") return res.status(400).json({ error: "Chỉ có thể ghim phát hành đã công bố." });
+  await supabaseAdmin.from("artist_profiles").update({ pinned_release_id: releaseId, updated_at: now }).eq("username", req.user.username);
+  res.json({ ok: true, pinnedReleaseId: releaseId });
 });
 
 // My artist stats
@@ -281,7 +309,7 @@ router.get("/:username", optionalAuth, async (req, res) => {
   }
 
   const stats = await computeArtistStats(req.params.username);
-  res.json({ artist: shapeArtistProfile(row, { ...stats, isFollowing, isOwner: !!(req.user && req.user.username === req.params.username) }) });
+  res.json({ artist: { ...shapeArtistProfile(row, { ...stats, isFollowing, isOwner: !!(req.user && req.user.username === req.params.username) }), pinnedRelease: await pinnedReleaseFor(row) } });
 });
 
 // Follow

@@ -40,6 +40,8 @@ function NotificationItem({ notif, onRead, onNavigate, index }) {
       onNavigate("artist", notif.targetId);
     } else if (notif.targetType === "post" && notif.targetId) {
       onNavigate("post", notif.targetId, notif.metadata?.commentId || null);
+    } else if (notif.targetType === "artist_post" && notif.targetId) {
+      onNavigate("artist_post", notif.targetId, notif.metadata?.commentId || null);
     } else if (notif.targetType === "room" && notif.targetId) {
       onNavigate("room", notif.targetId);
     } else if (notif.targetType === "playlist" && notif.targetId) {
@@ -134,6 +136,7 @@ export default function NotificationsPage({ session, onOpenTrack, onOpenArtist, 
     if (type === "track" && onOpenTrack) onOpenTrack(id);
     else if (type === "artist" && onOpenArtist) onOpenArtist(id);
     else if (type === "post" && onOpenPost) onOpenPost(id, commentId);
+    else if (type === "artist_post" && onOpenPost) onOpenPost(id, commentId, "artist_post");
     else if (type === "room" && onOpenRoom) onOpenRoom(id);
     else if (type === "playlist" && onOpenPlaylist) onOpenPlaylist(id);
   }

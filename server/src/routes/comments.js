@@ -10,7 +10,7 @@ import express from "express";
 import { randomUUID } from "node:crypto";
 import { requireAuth } from "../auth.js";
 import { supabaseAdmin } from "../supabase.js";
-import { recordActivity } from "../db.js";
+import { recordActivity, createNotification } from "../db.js";
 import { rateLimit } from "../rateLimit.js";
 import {
   sanitizeText, isBlank, extractMentions, shouldNotify,
@@ -226,6 +226,20 @@ router.post("/", requireAuth, createLimiter, async (req, res) => {
           }
         }
       } else {
+        // Top-level comment on an artist post → notify the artist (Phase 2.4).
+        if (targetType === "artist_post") {
+          const { data: ap } = await supabaseAdmin
+            .from("artist_posts").select("artist_username, artist_id")
+            .eq("id", String(targetId)).maybeSingle();
+          if (ap) {
+            const notify = await shouldNotify(ap.artist_username, req.user.username, "NEW_COMMENT", "artist_post", String(targetId));
+            if (notify) {
+              await createNotification(ap.artist_username, "NEW_COMMENT", "Bình luận mới",
+                `${authorDisplayName} đã bình luận bài đăng của bạn.`,
+                { actorUsername: req.user.username, targetType: "artist_post", targetId: String(targetId), commentId: id });
+            }
+          }
+        }
         for (const mt of mentionTargets) {
           const ok = await shouldNotify(mt, req.user.username, "MENTION", targetType, String(targetId));
           if (ok) {

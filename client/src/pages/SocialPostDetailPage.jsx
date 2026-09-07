@@ -45,6 +45,22 @@ function PostTarget({ target, onPlay, onOpenArtist, session, onFollowUser, class
       </div>
     );
   }
+  if (target.type === "release") {
+    return (
+      <div className="feed-track-card">
+        <div className="feed-track-art" style={target.coverUrl
+          ? { backgroundImage: `url('${target.coverUrl}')` }
+          : { background: gradientFor(hashHue(target.title)) }
+        }>
+          <Music size={16} style={{ color: "white", position: "absolute" }} />
+        </div>
+        <div className="feed-track-info">
+          <div className="feed-track-title">{target.title}</div>
+          <div className="feed-track-artist">{(target.releaseType || "Phát hành")}{target.trackCount ? ` • ${target.trackCount} bài` : ""}</div>
+        </div>
+      </div>
+    );
+  }
   if (target.type === "artist") {
     return (
       <div className="feed-track-card" onClick={() => onOpenArtist && onOpenArtist(target.username)}>
@@ -75,11 +91,12 @@ function PostTarget({ target, onPlay, onOpenArtist, session, onFollowUser, class
 }
 
 export default function SocialPostDetailPage({
-  postId, session, commentId, onBack, onPlay, onOpenArtist,
+  postId, session, commentId, onBack, onPlay, onOpenArtist, kind = "auto",
 }) {
   const [post, setPost] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [resolvedKind, setResolvedKind] = useState(null);
   const [comments, setComments] = useState([]);
   const [commentsLoading, setCommentsLoading] = useState(false);
   const [openedWithMore, setOpenedWithMore] = useState(false);
@@ -96,19 +113,37 @@ export default function SocialPostDetailPage({
     setLoading(true);
     setError(null);
     try {
-      const res = await api.postDetail(id);
+      let res;
+      if (kind === "artist_post") {
+        res = await api.artistPostDetail(id);
+        setResolvedKind("artist_post");
+      } else if (kind === "post") {
+        res = await api.postDetail(id);
+        setResolvedKind("post");
+      } else {
+        try {
+          res = await api.postDetail(id);
+          setResolvedKind("post");
+        } catch {
+          res = await api.artistPostDetail(id);
+          setResolvedKind("artist_post");
+        }
+      }
       setPost(res.post || null);
     } catch (e) {
       setError(e.message || "Không thể tải bài đăng.");
     }
     setLoading(false);
-  }, []);
+  }, [kind]);
+
+  // Comments on artist posts use the shared "artist_post" target (Phase 2.1).
+  const targetType = resolvedKind === "artist_post" ? "artist_post" : "post";
 
   const loadComments = useCallback(async (id, highlightId) => {
     if (!id) return;
     setCommentsLoading(true);
     try {
-      const res = await api.listComments("post", id, { limit: 30 });
+      const res = await api.listComments(targetType, id, { limit: 30 });
       setComments(res.comments || []);
       // Determine if the highlighted comment is loaded (post body or reply)
       setTimeout(() => {
@@ -118,7 +153,7 @@ export default function SocialPostDetailPage({
       }, 0);
     } catch { /* keep empty */ }
     setCommentsLoading(false);
-  }, []);
+  }, [targetType]);
 
   useEffect(() => {
     if (!postId) return;
@@ -130,13 +165,21 @@ export default function SocialPostDetailPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [postId]);
 
+  // Record a view once when an artist post detail is opened (Phase 2.4)
+  useEffect(() => {
+    if (post && resolvedKind === "artist_post") {
+      api.viewArtistPost(post.id).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [post?.id, resolvedKind]);
+
   const handleCreate = async (text) => {
     if (!post) return false;
     try {
-      const res = await api.createComment("post", post.id, text, null);
+      const res = await api.createComment(targetType, post.id, text, null);
       const created = {
         id: res.id,
-        targetType: "post", targetId: post.id, parentId: null,
+        targetType, targetId: post.id, parentId: null,
         authorUsername: session.username, authorDisplayName: session.username,
         authorAvatar: null, isAuthor: true,
         text, isDeleted: false, edited: false,
@@ -154,9 +197,9 @@ export default function SocialPostDetailPage({
   const handleReply = async (parentId, text) => {
     if (!post) return false;
     try {
-      const res = await api.createComment("post", post.id, text, parentId);
+      const res = await api.createComment(targetType, post.id, text, parentId);
       const created = {
-        id: res.id, targetType: "post", targetId: post.id, parentId,
+        id: res.id, targetType, targetId: post.id, parentId,
         authorUsername: session.username, authorDisplayName: session.username,
         authorAvatar: null, isAuthor: true,
         text, isDeleted: false, edited: false,
@@ -224,7 +267,9 @@ export default function SocialPostDetailPage({
     const was = post.reacted;
     setPost((p) => ({ ...p, reacted: !was, likeCount: (p.likeCount || 0) + (was ? -1 : 1) }));
     try {
-      const res = await api.reactPost(post.id);
+      const res = resolvedKind === "artist_post"
+        ? await api.reactArtistPost(post.id)
+        : await api.reactPost(post.id);
       setPost((p) => ({ ...p, reacted: res.reacted, likeCount: res.likeCount }));
     } catch (e) {
       setPost((p) => ({ ...p, reacted: was, likeCount: (p.likeCount || 0) + (was ? 1 : -1) }));
@@ -267,9 +312,10 @@ export default function SocialPostDetailPage({
 
   const config = ACTIVITY_CONFIG[post.eventType] || { icon: MessageCircle, color: "var(--text-muted)", verb: "đã tương tác" };
   const Icon = config.icon;
+  const ownerName = post.artistUsername || post.username;
   const ownerStyle = post.avatarUrl
     ? { backgroundImage: `url('${post.avatarUrl}')` }
-    : { background: gradientFor(hashHue(post.username)) };
+    : { background: gradientFor(hashHue(ownerName)) };
 
   return (
     <div className="feed-page post-detail-page">
@@ -279,7 +325,7 @@ export default function SocialPostDetailPage({
 
       <motion.div className="feed-item" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
         <div className="feed-item-header">
-          <button type="button" className="feed-avatar" style={ownerStyle} onClick={() => onOpenArtist && onOpenArtist(post.username)}>
+          <button type="button" className="feed-avatar" style={ownerStyle} onClick={() => onOpenArtist && onOpenArtist(ownerName)}>
             {!post.avatarUrl && <span style={{ fontSize: 12, fontWeight: 600 }}>{(post.displayName || "U")[0]}</span>}
           </button>
           <div className="feed-user-info">

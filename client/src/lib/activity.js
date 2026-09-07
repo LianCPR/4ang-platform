@@ -16,6 +16,7 @@ export const ACTIVITY_CONFIG = {
   TRACK_PUBLISHED: { icon: Music, color: "var(--c-sage)", verb: "đã phát hành" },
   ARTIST_APPROVED: { icon: Sparkles, color: "var(--c-gold)", verb: "đã được xác minh" },
   ROOM_STARTED: { icon: Radio, color: "var(--c-sage)", verb: "đã mở phòng nghe nhạc" },
+  ARTIST_POSTED: { icon: Music, color: "var(--c-sage-deep)", verb: "đã đăng" },
 };
 
 // Notification badge config (notification list).
@@ -36,6 +37,7 @@ export const NOTIFICATION_CONFIG = {
   MENTION: { icon: AtSign, color: "var(--c-gold)", label: "Được nhắc đến" },
   COMMENT_LIKED: { icon: Heart, color: "var(--c-rose)", label: "Tym bình luận" },
   POST_LIKED: { icon: Heart, color: "var(--c-rose)", label: "Yêu thích bài đăng" },
+  ARTIST_POSTED: { icon: Disc3, color: "var(--c-sage-deep)", label: "Bài đăng nghệ sĩ" },
   ROOM_INVITE: { icon: Radio, color: "var(--c-sage-deep)", label: "Mời nghe cùng" },
   SYSTEM: { icon: Bell, color: "var(--text-muted)", label: "Hệ thống" },
 };
