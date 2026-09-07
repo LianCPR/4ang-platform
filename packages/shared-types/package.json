@@ -1,0 +1,17 @@
+{
+  "name": "@4ang/shared-types",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./track": "./track.ts",
+    "./artist": "./artist.ts",
+    "./playlist": "./playlist.ts",
+    "./user": "./user.ts",
+    "./social": "./social.ts",
+    "./api": "./api.ts"
+  }
+}
